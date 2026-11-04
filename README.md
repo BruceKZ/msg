@@ -52,16 +52,10 @@ msg 把消息存进 SQLite，再按路由转发到 Telegram、Discord 等渠道�
 
 ## 架构
 
-```
-            入口 adapter（每种 kind 一个）       系统核心                出口 adapter（每种 sender 一个）
- iPhone ──┐                                                       ┌─▶ Telegram：HTML 文本
- 脚本   ──┼─▶ POST /api/v1/messages ─▶ Kind.Decode ─▶ Compose ─▶ Envelope ─┼─▶ Discord：embed 卡片
- ……     ──┘                                │                      └─▶ ……
-                                           ▼
-                          SQLite：messages + deliveries（同一事务）
-                                           │
-                                 调度器：按渠道投递、退避重试
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/architecture-dark.svg">
+  <img alt="msg 架构：来源经 HTTP API 和 Kind 生成 Envelope，存入 SQLite，再由调度器投递到各渠道" src="docs/architecture-light.svg" width="100%">
+</picture>
 
 **两头各一个 adapter，中间只有一个通用类型：**
 

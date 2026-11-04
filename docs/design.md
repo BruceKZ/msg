@@ -5,12 +5,10 @@
 
 ## 1. 核心模型：两头各一个 adapter，中间只有一个通用类型
 
-```
-  入口 adapter（每种 kind 一个）          系统核心                出口 adapter（每个 sender 一个）
-  sms.Decode → SMS.Compose()        ─┐                        ┌─▶ telegram：排成 HTML 文本
-  notice.Decode → Notice.Compose()  ─┼─▶ Message + Envelope ──┼─▶ discord：排成 embed 卡片
-  ……                                ─┘  存储 / 投递 / 重试    └─▶ ……
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="architecture-dark.svg">
+  <img alt="msg 架构：来源经 HTTP API 和 Kind 生成 Envelope，存入 SQLite，再由调度器投递到各渠道" src="architecture-light.svg" width="100%">
+</picture>
 
 - **Kind（消息类型）**：负责校验 `data` 的字段，并把自己拼装成 `Envelope`。
 - **Sender（发送渠道）**：只认识 `Envelope`，负责排成本平台的格式并发出去。

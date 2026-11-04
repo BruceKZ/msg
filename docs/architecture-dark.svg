@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="452" viewBox="0 0 1000 452" role="img" aria-label="msg 架构：来源经 HTTP API 和 Kind 生成 Envelope，存入 SQLite，再由调度器投递到各渠道">
+<defs>
+  <marker id="arr" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M1 1.5 L8.5 5 L1 8.5" fill="none" stroke="#636366" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+  </marker>
+  <marker id="arrA" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M1 1.5 L8.5 5 L1 8.5" fill="none" stroke="#0a84ff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+  </marker>
+</defs>
+<rect width="1000" height="452" rx="18" fill="#1c1c1e"/>
+<g font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
+<text x="24" y="44" font-size="12" font-weight="600" letter-spacing=".6" fill="#8e8e93">来源</text>
+<text x="224" y="44" font-size="12" font-weight="600" letter-spacing=".6" fill="#8e8e93">接入</text>
+<text x="434" y="44" font-size="12" font-weight="600" letter-spacing=".6" fill="#8e8e93">入口 ADAPTER</text>
+<text x="644" y="44" font-size="12" font-weight="600" letter-spacing=".6" fill="#8e8e93">核心</text>
+<text x="834" y="44" font-size="12" font-weight="600" letter-spacing=".6" fill="#8e8e93">出口 ADAPTER</text>
+<rect x="24" y="62" width="160" height="34" rx="10" fill="#2c2c2e" stroke="#3a3a3c" stroke-width="1"/>
+<text x="38" y="84" font-size="13.5" fill="#f5f5f7">iPhone 快捷指令</text>
+<rect x="24" y="108" width="160" height="34" rx="10" fill="#2c2c2e" stroke="#3a3a3c" stroke-width="1"/>
+<text x="38" y="130" font-size="13.5" fill="#f5f5f7">训练脚本 · 定时任务</text>
+<rect x="24" y="154" width="160" height="34" rx="10" fill="#2c2c2e" stroke="#3a3a3c" stroke-width="1"/>
+<text x="38" y="176" font-size="13.5" fill="#f5f5f7">任意 HTTP 客户端</text>
+<path d="M184 79 C 204 79, 204 133, 222 133" fill="none" stroke="#636366" stroke-width="1.6" stroke-linecap="round" marker-end="url(#arr)"/>
+<path d="M184 125 C 204 125, 204 133, 222 133" fill="none" stroke="#636366" stroke-width="1.6" stroke-linecap="round" marker-end="url(#arr)"/>
+<path d="M184 171 C 204 171, 204 133, 222 133" fill="none" stroke="#636366" stroke-width="1.6" stroke-linecap="round" marker-end="url(#arr)"/>
+<rect x="224" y="96" width="176" height="74" rx="12" fill="#2c2c2e" stroke="#3a3a3c" stroke-width="1"/>
+<text x="240" y="119.0" font-size="15" font-weight="600" fill="#f5f5f7">HTTP API</text>
+<text x="240" y="139.0" font-size="12.5" fill="#98989d">POST /api/v1/messages</text>
+<text x="240" y="159.0" font-size="12.5" fill="#98989d">token · Cloudflare Access</text>
+<path d="M400 133 L 432 133" fill="none" stroke="#636366" stroke-width="1.6" stroke-linecap="round" marker-end="url(#arr)"/>
+<rect x="434" y="96" width="176" height="74" rx="12" fill="#2c2c2e" stroke="#3a3a3c" stroke-width="1"/>
+<text x="450" y="119.0" font-size="15" font-weight="600" fill="#f5f5f7">Kind</text>
+<text x="450" y="139.0" font-size="12.5" fill="#98989d">校验 data</text>
+<text x="450" y="159.0" font-size="12.5" fill="#98989d">Compose → Envelope</text>
+<path d="M610 133 L 642 133" fill="none" stroke="#0a84ff" stroke-width="1.6" stroke-linecap="round" marker-end="url(#arrA)"/>
+<rect x="644" y="96" width="166" height="74" rx="12" fill="#0a84ff" stroke="none" stroke-width="1"/>
+<text x="660" y="119.0" font-size="15" font-weight="600" fill="#ffffff">Envelope</text>
+<text x="660" y="139.0" font-size="12.5" fill="#cfe3ff">标题 · 正文 · 字段</text>
+<text x="660" y="159.0" font-size="12.5" fill="#cfe3ff">时间 · 优先级</text>
+<path d="M727 170 L 727 246" fill="none" stroke="#0a84ff" stroke-width="1.6" stroke-linecap="round" marker-end="url(#arrA)"/>
+<text x="737" y="212" font-size="12" text-anchor="start" fill="#98989d">存储 · 去重</text>
+<rect x="644" y="248" width="166" height="92" rx="12" fill="#2c2c2e" stroke="#3a3a3c" stroke-width="1"/>
+<text x="660" y="270.5" font-size="15" font-weight="600" fill="#f5f5f7">SQLite</text>
+<text x="660" y="290.5" font-size="12.5" fill="#98989d">messages · deliveries</text>
+<text x="660" y="310.5" font-size="12.5" fill="#98989d">senders · routes</text>
+<text x="660" y="330.5" font-size="12.5" fill="#98989d">tokens</text>
+<path d="M810 294 L 834 294" fill="none" stroke="#636366" stroke-width="1.6" stroke-linecap="round" marker-end="url(#arr)"/>
+<rect x="836" y="262" width="140" height="64" rx="12" fill="#2c2c2e" stroke="#3a3a3c" stroke-width="1"/>
+<text x="852" y="289.5" font-size="15" font-weight="600" fill="#f5f5f7">调度器</text>
+<text x="852" y="309.5" font-size="12.5" fill="#98989d">投递 · 退避重试</text>
+<rect x="836" y="62" width="140" height="34" rx="10" fill="#2c2c2e" stroke="#3a3a3c" stroke-width="1"/>
+<text x="850" y="84" font-size="13.5" fill="#f5f5f7">Telegram</text>
+<rect x="836" y="108" width="140" height="34" rx="10" fill="#2c2c2e" stroke="#3a3a3c" stroke-width="1"/>
+<text x="850" y="130" font-size="13.5" fill="#f5f5f7">Discord</text>
+<rect x="836" y="154" width="140" height="34" rx="10" fill="#2c2c2e" stroke="#3a3a3c" stroke-width="1"/>
+<text x="850" y="176" font-size="13.5" fill="#f5f5f7">更多渠道…</text>
+<path d="M906 262 L 906 200" fill="none" stroke="#636366" stroke-width="1.6" stroke-linecap="round" marker-end="url(#arr)"/>
+<path d="M644 294 L 612 294" fill="none" stroke="#636366" stroke-width="1.6" stroke-dasharray="4 4" stroke-linecap="round" marker-end="url(#arr)"/>
+<rect x="224" y="262" width="386" height="64" rx="12" fill="#2c2c2e" stroke="#3a3a3c" stroke-width="1"/>
+<text x="240" y="289.5" font-size="15" font-weight="600" fill="#f5f5f7">读取</text>
+<text x="240" y="309.5" font-size="12.5" fill="#98989d">网页消息中心  ·  GET /api/v1/messages  ·  Telegram 命令</text>
+<line x1="24" y1="372" x2="976" y2="372" stroke="#3a3a3c" stroke-width="1"/>
+<text x="24" y="402" font-size="13" fill="#f5f5f7"><tspan font-weight="600">Kind</tspan><tspan fill="#98989d">：每种消息一个，校验自己的字段并拼装成 Envelope。</tspan></text>
+<text x="24" y="426" font-size="13" fill="#f5f5f7"><tspan font-weight="600">Sender</tspan><tspan fill="#98989d">：每个渠道一个，只认识 Envelope。核心只存储和投递 Envelope，新增类型或渠道都不用改它。</tspan></text>
+</g></svg>
