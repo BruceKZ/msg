@@ -3,14 +3,9 @@
   "db_path": "/mnt/ssd/msg/msg.db",
   "timezone": "Europe/Zurich",
 
-  "tokens": [
-    { "name": "iphone-backup", "token": "REPLACE: msg gentoken", "scopes": ["messages:write"], "kinds": ["sms"] },
-    { "name": "laptop",        "token": "REPLACE: msg gentoken", "scopes": ["messages:read"] }
-  ],
-
   "access": {
-    "team_domain": "",
-    "aud": "",
+    "team_domain": "REPLACE.cloudflareaccess.com",
+    "aud": "REPLACE-with-Application-Audience-tag",
     "scopes": ["messages:read", "messages:delete", "deliveries:write", "senders:write", "tokens:write"]
   },
 

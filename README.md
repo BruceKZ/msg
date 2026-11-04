@@ -130,7 +130,8 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8787/api/v1/messages
 
 浏览器打开 <http://127.0.0.1:8787>，输入这个 token 即可看到网页；“设置”页里可以添加渠道、生成 token。
 
-> 配置文件里的 token 适合本地开发或初次启动。正式使用时，网页登录走 Cloudflare Access，给程序用的 token 在网页上生成。
+> 配置文件里的 token **只用于本地开发**（本地没有 Cloudflare Access，需要它来登录网页）。
+> 正式部署时配置文件里不写 token：人通过 Access 登录，给程序用的 token 一律在网页上生成和吊销。
 
 ### 2. 部署到 OpenWrt 路由器
 
@@ -140,12 +141,11 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8787/api/v1/messages
 deploy/deploy.sh openwrt          # openwrt 是 ~/.ssh/config 里的主机名
 ```
 
-第一次部署时，脚本会提示先创建配置：
+第一次部署时，脚本会提示先创建配置（不写 token，见第 3、5 步）：
 
 ```bash
 ssh openwrt
-msg gentoken                      # 需要的话生成 token
-vi /etc/msg/config.json           # 参考 deploy/config.example.json
+vi /etc/msg/config.json           # 参考 deploy/config.example.json，填 Access 的 team_domain 和 aud
 chmod 600 /etc/msg/config.json
 msg -config /etc/msg/config.json check
 /etc/init.d/msg enable && /etc/init.d/msg start
@@ -233,9 +233,6 @@ token 泄露或换手机时，在设置页**吊销**旧 token、生成新的即�
   "listen": "127.0.0.1:8787",
   "db_path": "/mnt/ssd/msg/msg.db",
   "timezone": "Europe/Zurich",
-  "tokens": [
-    { "name": "bootstrap", "token": "…", "scopes": ["messages:write"], "kinds": ["sms"] }
-  ],
   "access": {
     "team_domain": "<team>.cloudflareaccess.com",
     "aud": "<Application Audience Tag>",
@@ -252,7 +249,7 @@ token 泄露或换手机时，在设置页**吊销**旧 token、生成新的即�
 | `listen` | `127.0.0.1:8787` | 只监听本机，由 cloudflared 转发 |
 | `db_path` | 必填 | 所在目录必须已存在 |
 | `timezone` | `Local` | 推送消息里显示时间用（程序内置时区库，OpenWrt 也可用） |
-| `tokens` | `[]` | 写在配置里的 token（可选）。名称 1–64 位小写字母数字 `.-_`，token 至少 16 位，名称和 token 都不能重复 |
+| `tokens` | `[]` | **仅本地开发用**，正式部署留空。格式 `[{name, token, scopes, kinds}]`；名称 1–64 位小写字母数字 `.-_`，token 至少 16 位 |
 | `access.team_domain` / `aud` | 空 | 两个都填才启用 Access JWT 校验 |
 | `access.scopes` | 全部管理权限 | Access 登录用户获得的权限 |
 | `kinds.<name>.enabled` | `true` | 关闭某种类型 |
@@ -293,7 +290,7 @@ token 泄露或换手机时，在设置页**吊销**旧 token、生成新的即�
 - 格式 `msg_` + 43 位随机字符（256 位熵）；数据库只存 SHA-256，原文只在生成时返回一次。
 - 列表显示前几位、权限、类型、创建人、最近使用时间（约每分钟更新一次）。
 - 吊销立即生效；同名 token 吊销后可以重新生成。
-- 配置文件里的 token 在列表中标为“配置文件”，只能改配置删除。
+- 正式部署时所有 token 都在网页上管理；配置文件里的 token 只用于本地开发，在列表中标为“配置文件”，只能改配置删除。
 
 ---
 
