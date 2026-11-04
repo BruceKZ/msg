@@ -66,6 +66,10 @@ h2{font-size:16px;margin:22px 0 4px}
 .chats{border:1px dashed var(--line);border-radius:10px;padding:8px 10px;font-size:13px}
 .chats .row{justify-content:space-between;padding:3px 0}
 .routes .row{gap:12px}
+.secret{display:flex;gap:8px;align-items:center;margin:8px 0}
+.secret code{flex:1;min-width:0;overflow-wrap:anywhere;background:var(--chip);border-radius:8px;padding:8px 10px;font:13px ui-monospace,SFMono-Regular,Menlo,monospace}
+.card.revoked{opacity:.55}
+.card.highlight{border-color:var(--ok)}
 </style>
 </head>
 <body>
@@ -101,6 +105,17 @@ h2{font-size:16px;margin:22px 0 4px}
     <h2>路由</h2>
     <p class="sub">每种消息默认发给哪些渠道。提交消息时也可以用 <code>senders</code> 单独指定。</p>
     <div id="routes" class="routes"></div>
+
+    <div id="tokensSection" hidden>
+      <h2>API Token</h2>
+      <p class="sub">给手机快捷指令、脚本等程序用，放在请求头 <code>Authorization: Bearer &lt;token&gt;</code> 里。
+        token 只在生成时显示一次；不用了或可能泄露时，点“吊销”立即失效。</p>
+      <div id="newTokenResult"></div>
+      <div id="tokenList"></div>
+      <div class="row"><button class="btn" id="addToken">+ 生成 token</button></div>
+      <div id="newToken"></div>
+      <label class="inline help" style="margin-top:8px"><input type="checkbox" id="showRevoked">显示已吊销的 token</label>
+    </div>
   </div>
 </main>
 <script>
@@ -403,6 +418,114 @@ h2{font-size:16px;margin:22px 0 4px}
     }
   }
 
+  // ---------- API tokens ----------
+  const SCOPE_LABEL = {
+    'messages:write': '提交消息', 'messages:read': '读取消息',
+    'messages:delete': '删除消息', 'deliveries:write': '重新投递',
+  };
+  const dfmt = new Intl.DateTimeFormat(undefined, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+  let tokenMeta = { mintable_scopes: [], kinds: [] };
+
+  async function loadTokens() {
+    const r = await api('/tokens' + ($('showRevoked').checked ? '?include_revoked=1' : ''));
+    tokenMeta = r;
+    const box = $('tokenList'); box.replaceChildren();
+    if (!r.items.length) box.append(el('div', 'empty', '还没有 token。'));
+    for (const t of r.items) box.append(tokenCard(t));
+  }
+
+  function tokenCard(t) {
+    const card = el('div', 'card' + (t.revoked_at ? ' revoked' : ''));
+    const head = el('div', 'row');
+    head.append(el('b', '', t.name));
+    if (t.prefix) head.append(el('code', 'chip', t.prefix + '…'));
+    head.append(el('span', 'chip ' + (t.revoked_at ? 'disabled' : 'active'), t.revoked_at ? '已吊销' : (t.origin === 'config' ? '配置文件' : '有效')));
+    head.append(el('span', 'grow'));
+    if (t.origin === 'web' && !t.revoked_at) {
+      head.append(btn('吊销', 'link danger', async () => {
+        if (!confirm(`吊销 token「${t.name}」？使用它的程序会立即无法访问。`)) return;
+        try { await api('/tokens/' + t.id, { method: 'DELETE' }); await loadTokens(); } catch (e) { alert(errText(e)); }
+      }));
+    }
+    card.append(head);
+    const meta = el('div', 'foot');
+    meta.append(el('span', '', '权限：' + t.scopes.map(s => SCOPE_LABEL[s] || s).join('、')));
+    meta.append(el('span', '', '类型：' + (t.kinds ? t.kinds.join('、') : '全部')));
+    if (t.created_at) meta.append(el('span', '', '创建：' + dfmt.format(Date.parse(t.created_at)) + (t.created_by ? '（' + t.created_by + '）' : '')));
+    meta.append(el('span', '', '最近使用：' + (t.last_used_at ? ago(Date.parse(t.last_used_at)) : (t.origin === 'config' ? '—' : '从未'))));
+    if (t.revoked_at) meta.append(el('span', '', '吊销：' + dfmt.format(Date.parse(t.revoked_at))));
+    if (t.origin === 'config') meta.append(el('span', '', '写在服务器配置文件里，只能在那里删除'));
+    card.append(meta);
+    return card;
+  }
+
+  function tokenForm() {
+    const form = el('div', 'form card');
+    const name = Object.assign(el('input'), { placeholder: '例如 iphone-backup、gpu-server', autocomplete: 'off' });
+    const ln = el('label', '', '名称'); ln.append(name, el('span', 'help', '会作为消息的“来源”显示。小写字母、数字、. - _。'));
+    form.append(ln);
+
+    form.append(el('div', '', '权限'));
+    const scopeBoxes = tokenMeta.mintable_scopes.map(s => {
+      const c = Object.assign(el('input'), { type: 'checkbox', checked: s === 'messages:write' });
+      const l = el('label', 'inline'); l.append(c, el('span', '', (SCOPE_LABEL[s] || s) + '（' + s + '）'));
+      form.append(l);
+      return [s, c];
+    });
+    form.append(el('div', 'help', '管理渠道和 token 只能在登录后的网页上进行，不能授予 token。'));
+
+    form.append(el('div', '', '可用的消息类型'));
+    const allKinds = Object.assign(el('input'), { type: 'radio', name: 'tokkinds', checked: true });
+    const someKinds = Object.assign(el('input'), { type: 'radio', name: 'tokkinds' });
+    const la = el('label', 'inline'); la.append(allKinds, el('span', '', '全部类型'));
+    const ls = el('label', 'inline'); ls.append(someKinds, el('span', '', '只限：'));
+    const kindRow = el('div', 'row');
+    const kindBoxes = tokenMeta.kinds.map(k => {
+      const c = Object.assign(el('input'), { type: 'checkbox' });
+      c.onchange = () => { someKinds.checked = true; };
+      const l = el('label', 'inline'); l.append(c, el('span', '', k)); kindRow.append(l);
+      return [k, c];
+    });
+    form.append(la, ls, kindRow);
+
+    const msg = el('div', '');
+    const save = btn('生成', 'btn primary', async () => {
+      const body = {
+        name: name.value.trim(),
+        scopes: scopeBoxes.filter(([, c]) => c.checked).map(([s]) => s),
+        kinds: allKinds.checked ? null : kindBoxes.filter(([, c]) => c.checked).map(([k]) => k),
+      };
+      save.disabled = true; msg.className = ''; msg.textContent = '生成中…';
+      try {
+        const r = await api('/tokens', { method: 'POST', body: JSON.stringify(body) });
+        $('newToken').replaceChildren();
+        showSecret(r);
+        await loadTokens();
+      } catch (e) { msg.className = 'err'; msg.textContent = errText(e); save.disabled = false; }
+    });
+    const actions = el('div', 'row'); actions.append(save, btn('取消', 'btn', () => $('newToken').replaceChildren()));
+    form.append(actions, msg);
+    return form;
+  }
+
+  function showSecret(r) {
+    const card = el('div', 'card highlight');
+    card.append(el('b', '', `token「${r.info.name}」已生成`));
+    card.append(el('div', 'err', '请现在复制保存。关闭后无法再次查看，只能吊销后重新生成。'));
+    const row = el('div', 'secret');
+    const code = el('code', '', r.token);
+    const copy = btn('复制', 'btn', async () => {
+      try { await navigator.clipboard.writeText(r.token); copy.textContent = '已复制 ✓'; } catch { copy.textContent = '请手动复制'; }
+    });
+    row.append(code, copy);
+    card.append(row, el('div', 'help', '请求头：Authorization: Bearer ' + r.token.slice(0, 10) + '…'));
+    card.append(btn('我已保存，关闭', 'btn', () => card.remove()));
+    $('newTokenResult').replaceChildren(card);
+  }
+
+  $('addToken').onclick = () => $('newToken').replaceChildren(tokenForm());
+  $('showRevoked').onchange = () => loadTokens().catch(e => alert(errText(e)));
+
   $('addSender').onclick = () => {
     if (!types.length) return;
     $('newSender').replaceChildren(Object.assign(senderForm(types.find(t => t.name === 'telegram') || types[0], null), { className: 'form card' }));
@@ -410,10 +533,14 @@ h2{font-size:16px;margin:22px 0 4px}
 
   // ---------- views ----------
   async function show() {
-    const settings = location.hash === '#settings' && can('senders:write');
+    const settings = location.hash === '#settings' && (can('senders:write') || can('tokens:write'));
     $('app').hidden = settings; $('settings').hidden = !settings; $('filters').hidden = settings;
     $('navMsgs').classList.toggle('on', !settings); $('navSettings').classList.toggle('on', settings);
-    if (settings) { try { await loadSettings(); } catch (e) { $('senderList').replaceChildren(el('div', 'err', errText(e))); } }
+    if (settings) {
+      $('tokensSection').hidden = !can('tokens:write');
+      if (can('senders:write')) { try { await loadSettings(); } catch (e) { $('senderList').replaceChildren(el('div', 'err', errText(e))); } }
+      if (can('tokens:write')) { try { await loadTokens(); } catch (e) { $('tokenList').replaceChildren(el('div', 'err', errText(e))); } }
+    }
   }
 
   async function start() {
@@ -424,7 +551,7 @@ h2{font-size:16px;margin:22px 0 4px}
       const sel = $('kind'); sel.length = 1;
       for (const k of items) sel.append(Object.assign(el('option', '', k.name + ' · ' + k.description), { value: k.name }));
       $('login').hidden = true;
-      $('nav').hidden = !can('senders:write');
+      $('nav').hidden = !(can('senders:write') || can('tokens:write'));
       await load();
       clearInterval(timer); timer = setInterval(poll, 5000);
       await show();

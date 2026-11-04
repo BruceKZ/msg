@@ -91,6 +91,20 @@ var migrations = []string{
 		kind    TEXT PRIMARY KEY,
 		senders TEXT NOT NULL  -- JSON array of sender names
 	);`,
+	// v3: API tokens created and revoked from the web UI. Only a hash is stored.
+	`CREATE TABLE tokens (
+		id           INTEGER PRIMARY KEY AUTOINCREMENT,
+		name         TEXT NOT NULL,
+		hash         TEXT NOT NULL UNIQUE,  -- hex sha256 of the token
+		prefix       TEXT NOT NULL,         -- first characters, for recognising it in lists
+		scopes       TEXT NOT NULL,         -- JSON array
+		kinds        TEXT,                  -- JSON array, NULL = all kinds
+		created_at   INTEGER NOT NULL,
+		created_by   TEXT NOT NULL,
+		last_used_at INTEGER NOT NULL DEFAULT 0,
+		revoked_at   INTEGER NOT NULL DEFAULT 0
+	);
+	CREATE UNIQUE INDEX tokens_active_name ON tokens(name) WHERE revoked_at = 0;`,
 }
 
 func Open(path string) (*Store, error) {

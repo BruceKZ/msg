@@ -11,7 +11,7 @@
   "access": {
     "team_domain": "",
     "aud": "",
-    "scopes": ["messages:read", "messages:delete", "deliveries:write", "senders:write"]
+    "scopes": ["messages:read", "messages:delete", "deliveries:write", "senders:write", "tokens:write"]
   },
 
   "kinds": {

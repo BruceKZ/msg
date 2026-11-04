@@ -57,6 +57,9 @@ func (s *Server) Handler() http.Handler {
 	route("GET /api/v1/sender-types", auth.ScopeSendersWrite, s.senderTypes)
 	route("GET /api/v1/routes", "", s.listRoutes)
 	route("PUT /api/v1/routes/{kind}", auth.ScopeSendersWrite, s.setRoute)
+	route("GET /api/v1/tokens", auth.ScopeTokensWrite, s.listTokens)
+	route("POST /api/v1/tokens", auth.ScopeTokensWrite, s.createToken)
+	route("DELETE /api/v1/tokens/{id}", auth.ScopeTokensWrite, s.revokeToken)
 	route("GET /api/v1/me", "", s.me)
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok") })
@@ -85,6 +88,9 @@ func headers(next http.Handler) http.Handler {
 		h.Set("X-Frame-Options", "DENY")
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			h.Set("Cache-Control", "no-store")
+		} else {
+			// The UI is embedded in the binary; make browsers fetch the new one after an upgrade.
+			h.Set("Cache-Control", "no-cache")
 		}
 		next.ServeHTTP(w, r)
 	})
@@ -372,6 +378,61 @@ func (s *Server) redeliver(w http.ResponseWriter, r *http.Request, p *auth.Princ
 		s.hub.Wake()
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{"queued": n})
+}
+
+// ---- API tokens ----
+
+func (s *Server) listTokens(w http.ResponseWriter, r *http.Request, p *auth.Principal) {
+	items, err := s.auth.ListTokens(r.Context(), r.URL.Query().Get("include_revoked") == "1")
+	if err != nil {
+		s.internal(w, "list tokens", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "mintable_scopes": auth.MintableScopes, "kinds": s.hub.KindNames()})
+}
+
+func (s *Server) createToken(w http.ResponseWriter, r *http.Request, p *auth.Principal) {
+	var req auth.NewToken
+	r.Body = http.MaxBytesReader(w, r.Body, maxBody)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		s.bodyErr(w, err)
+		return
+	}
+	secret, info, err := s.auth.CreateToken(r.Context(), req, p.Name)
+	var ve *core.ValidationError
+	switch {
+	case errors.As(err, &ve):
+		writeErr(w, http.StatusBadRequest, "validation_failed", ve.Message, ve.Field)
+		return
+	case err != nil:
+		s.internal(w, "create token", err)
+		return
+	}
+	s.log.Info("token created", "id", info.ID, "name", info.Name, "scopes", info.Scopes, "by", p.Name)
+	w.Header().Set("Location", "/api/v1/tokens/"+strconv.FormatInt(info.ID, 10))
+	// The secret is returned exactly once; only its hash is stored.
+	writeJSON(w, http.StatusCreated, map[string]any{"token": secret, "info": info})
+}
+
+func (s *Server) revokeToken(w http.ResponseWriter, r *http.Request, p *auth.Principal) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		writeErr(w, http.StatusNotFound, "not_found", "token not found", "")
+		return
+	}
+	info, err := s.auth.RevokeToken(r.Context(), id)
+	if errors.Is(err, store.ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "not_found", "token not found or already revoked", "")
+		return
+	}
+	if err != nil {
+		s.internal(w, "revoke token", err)
+		return
+	}
+	s.log.Info("token revoked", "id", id, "name", info.Name, "by", p.Name)
+	writeJSON(w, http.StatusOK, info)
 }
 
 // ---- metadata ----

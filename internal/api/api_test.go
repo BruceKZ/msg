@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -147,6 +148,7 @@ func setup(t *testing.T) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
+	a.UseStore(st)
 	srv := httptest.NewServer(New(h, st, a, mgr, web.FS(), log).Handler())
 	t.Cleanup(srv.Close)
 	return &env{t: t, url: srv.URL, tg: tg, dc: dc}
@@ -556,5 +558,93 @@ func TestSenderManagement(t *testing.T) {
 		if it["kind"] == "note" && (len(it["senders"].([]any)) != 1 || it["senders"].([]any)[0] != "tg") {
 			t.Fatalf("route after delete: %v", it)
 		}
+	}
+}
+
+func TestTokens(t *testing.T) {
+	e := setup(t)
+
+	cases := []struct {
+		name, method, path, token, body string
+		status                          int
+		code                            string
+	}{
+		{"reader cannot list", "GET", "/api/v1/tokens", tokReader, "", 403, "forbidden"},
+		{"phone cannot create", "POST", "/api/v1/tokens", tokPhone, `{"name":"x","scopes":["messages:read"]}`, 403, "forbidden"},
+		{"no scopes", "POST", "/api/v1/tokens", tokAdmin, `{"name":"x","scopes":[]}`, 400, "validation_failed"},
+		{"cannot mint senders:write", "POST", "/api/v1/tokens", tokAdmin, `{"name":"x","scopes":["senders:write"]}`, 400, "validation_failed"},
+		{"cannot mint tokens:write", "POST", "/api/v1/tokens", tokAdmin, `{"name":"x","scopes":["tokens:write"]}`, 400, "validation_failed"},
+		{"bad name", "POST", "/api/v1/tokens", tokAdmin, `{"name":"Bad Name","scopes":["messages:read"]}`, 400, "validation_failed"},
+		{"config name taken", "POST", "/api/v1/tokens", tokAdmin, `{"name":"reader","scopes":["messages:read"]}`, 400, "validation_failed"},
+		{"unknown kind", "POST", "/api/v1/tokens", tokAdmin, `{"name":"x","scopes":["messages:read"],"kinds":["fax"]}`, 400, "validation_failed"},
+		{"empty kinds", "POST", "/api/v1/tokens", tokAdmin, `{"name":"x","scopes":["messages:read"],"kinds":[]}`, 400, "validation_failed"},
+		{"revoke config token", "DELETE", "/api/v1/tokens/0", tokAdmin, "", 404, "not_found"},
+		{"revoke missing", "DELETE", "/api/v1/tokens/999", tokAdmin, "", 404, "not_found"},
+	}
+	for _, c := range cases {
+		r := e.do(c.method, c.path, c.token, c.body)
+		if r.status != c.status || errCode(r) != c.code {
+			t.Errorf("%s: got %d %q, want %d %q (%v)", c.name, r.status, errCode(r), c.status, c.code, r.body)
+		}
+	}
+
+	// Create a write-only, sms-only token and use it.
+	r := e.do("POST", "/api/v1/tokens", tokAdmin, `{"name":"new-phone","scopes":["messages:write"],"kinds":["sms"]}`)
+	if r.status != 201 {
+		t.Fatalf("create: %d %v", r.status, r.body)
+	}
+	secret := r.body["token"].(string)
+	info := r.body["info"].(map[string]any)
+	id := int(info["id"].(float64))
+	if !strings.HasPrefix(secret, "msg_") || len(secret) < 40 || !strings.HasPrefix(secret, info["prefix"].(string)) {
+		t.Fatalf("secret %q / info %v", secret, info)
+	}
+	if r := e.do("POST", "/api/v1/messages", secret, `{"kind":"sms","data":{"from":"a","body":"via web token"}}`); r.status != 201 || r.body["source"] != "new-phone" {
+		t.Fatalf("use token: %d %v", r.status, r.body)
+	}
+	if r := e.do("POST", "/api/v1/messages", secret, `{"kind":"note","data":{"text":"x"}}`); r.status != 403 {
+		t.Fatalf("kind limit: %d", r.status)
+	}
+	if r := e.do("GET", "/api/v1/messages", secret, ""); r.status != 403 {
+		t.Fatalf("scope limit: %d", r.status)
+	}
+	if r := e.do("POST", "/api/v1/tokens", tokAdmin, `{"name":"new-phone","scopes":["messages:read"]}`); errCode(r) != "validation_failed" {
+		t.Fatalf("duplicate active name: %v", r.body)
+	}
+
+	// The list never contains the secret; it shows usage.
+	r = e.do("GET", "/api/v1/tokens", tokAdmin, "")
+	raw, _ := json.Marshal(r.body)
+	if strings.Contains(string(raw), secret) || strings.Contains(string(raw), "hash") {
+		t.Fatal("token list leaks the secret or its hash")
+	}
+	var web map[string]any
+	for _, it := range items(r) {
+		if it["origin"] == "web" {
+			web = it
+		}
+	}
+	if web == nil || web["last_used_at"] == nil || len(items(r)) != 5 {
+		t.Fatalf("list: %v", r.body)
+	}
+
+	// Revoke: the token stops working at once, and the name can be reused.
+	if r := e.do("DELETE", "/api/v1/tokens/"+strconv.Itoa(id), tokAdmin, ""); r.status != 200 || r.body["revoked_at"] == nil {
+		t.Fatalf("revoke: %d %v", r.status, r.body)
+	}
+	if r := e.do("POST", "/api/v1/messages", secret, `{"kind":"sms","data":{"from":"a","body":"after revoke"}}`); r.status != 401 {
+		t.Fatalf("revoked token still works: %d", r.status)
+	}
+	if r := e.do("DELETE", "/api/v1/tokens/"+strconv.Itoa(id), tokAdmin, ""); r.status != 404 {
+		t.Fatalf("double revoke: %d", r.status)
+	}
+	if r := e.do("GET", "/api/v1/tokens", tokAdmin, ""); len(items(r)) != 4 {
+		t.Fatalf("revoked hidden by default: %v", r.body)
+	}
+	if r := e.do("GET", "/api/v1/tokens?include_revoked=1", tokAdmin, ""); len(items(r)) != 5 {
+		t.Fatalf("include_revoked: %v", r.body)
+	}
+	if r := e.do("POST", "/api/v1/tokens", tokAdmin, `{"name":"new-phone","scopes":["messages:write"]}`); r.status != 201 {
+		t.Fatalf("reuse name after revoke: %d %v", r.status, r.body)
 	}
 }

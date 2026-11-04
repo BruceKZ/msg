@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+
+	"msg/internal/store"
 )
 
 const (
@@ -18,9 +20,10 @@ const (
 	ScopeMessagesDelete  = "messages:delete"
 	ScopeDeliveriesWrite = "deliveries:write"
 	ScopeSendersWrite    = "senders:write" // manage senders (incl. their secrets) and routes
+	ScopeTokensWrite     = "tokens:write"  // create and revoke API tokens
 )
 
-var AllScopes = []string{ScopeMessagesWrite, ScopeMessagesRead, ScopeMessagesDelete, ScopeDeliveriesWrite, ScopeSendersWrite}
+var AllScopes = []string{ScopeMessagesWrite, ScopeMessagesRead, ScopeMessagesDelete, ScopeDeliveriesWrite, ScopeSendersWrite, ScopeTokensWrite}
 
 // Principal is an authenticated caller.
 type Principal struct {
@@ -61,9 +64,11 @@ type Token struct {
 }
 
 type Authenticator struct {
-	tokens       []tokenEntry
+	tokens       []tokenEntry // from the config file
 	access       *AccessVerifier
 	accessScopes []string
+	knownKinds   []string
+	db           *store.Store // tokens created in the web UI; nil = none
 }
 
 type tokenEntry struct {
@@ -78,7 +83,7 @@ var (
 
 // New validates the token list. knownKinds is used to reject typos in token kind lists.
 func New(tokens []Token, access *AccessVerifier, accessScopes []string, knownKinds []string) (*Authenticator, error) {
-	a := &Authenticator{access: access, accessScopes: accessScopes}
+	a := &Authenticator{access: access, accessScopes: accessScopes, knownKinds: slices.Clone(knownKinds)}
 	names := map[string]bool{}
 	secrets := map[string]bool{}
 	for i, t := range tokens {
@@ -101,6 +106,9 @@ func New(tokens []Token, access *AccessVerifier, accessScopes []string, knownKin
 			if !slices.Contains(knownKinds, k) {
 				return nil, fmt.Errorf("tokens[%d] (%s): unknown kind %q", i, t.Name, k)
 			}
+		}
+		if !tokenNameRe.MatchString(t.Name) {
+			return nil, fmt.Errorf("tokens[%d] (%s): name must be 1–64 characters: lowercase letters, digits, '.', '-' or '_'", i, t.Name)
 		}
 		names[t.Name], secrets[t.Token] = true, true
 		var kinds []string
@@ -136,6 +144,14 @@ func (a *Authenticator) Authenticate(r *http.Request) (*Principal, error) {
 			if subtle.ConstantTimeCompare(h[:], a.tokens[i].hash[:]) == 1 {
 				p := a.tokens[i].p
 				return &p, nil
+			}
+		}
+		if a.db != nil {
+			if row, err := a.db.ActiveToken(r.Context(), hashHex(tok)); err == nil {
+				a.db.TouchToken(r.Context(), row.ID)
+				return &Principal{Name: row.Name, Via: "token", Scopes: row.Scopes, Kinds: row.Kinds}, nil
+			} else if !errors.Is(err, store.ErrNotFound) {
+				return nil, fmt.Errorf("token lookup: %w", err)
 			}
 		}
 		return nil, ErrBadToken

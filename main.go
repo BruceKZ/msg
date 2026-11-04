@@ -190,7 +190,7 @@ func build(ctx context.Context, cfgPath string, log *slog.Logger, dryRun bool) (
 	}
 
 	var verifier *auth.AccessVerifier
-	accessScopes := []string{auth.ScopeMessagesRead, auth.ScopeMessagesDelete, auth.ScopeDeliveriesWrite, auth.ScopeSendersWrite}
+	accessScopes := []string{auth.ScopeMessagesRead, auth.ScopeMessagesDelete, auth.ScopeDeliveriesWrite, auth.ScopeSendersWrite, auth.ScopeTokensWrite}
 	if cfg.Access != nil {
 		if cfg.Access.TeamDomain != "" || cfg.Access.AUD != "" {
 			if cfg.Access.TeamDomain == "" || cfg.Access.AUD == "" {
@@ -206,6 +206,7 @@ func build(ctx context.Context, cfgPath string, log *slog.Logger, dryRun bool) (
 	if err != nil {
 		return nil, err
 	}
+	authn.UseStore(st)
 
 	a := &app{store: st, hub: h, dispatcher: disp}
 	a.server = &http.Server{
