@@ -1,0 +1,29 @@
+{
+  "listen": "127.0.0.1:8787",
+  "db_path": "/mnt/ssd/msg/msg.db",
+  "timezone": "Europe/Zurich",
+
+  "tokens": [
+    { "name": "iphone-backup", "token": "REPLACE: msg gentoken", "scopes": ["messages:write"], "kinds": ["sms"] },
+    { "name": "laptop",        "token": "REPLACE: msg gentoken", "scopes": ["messages:read"] }
+  ],
+
+  "access": {
+    "team_domain": "",
+    "aud": "",
+    "scopes": ["messages:read", "messages:delete", "deliveries:write"]
+  },
+
+  "kinds": {
+    "sms": { "enabled": true, "dedup_window_seconds": 120 }
+  },
+
+  "senders": [
+    { "type": "telegram", "name": "tg", "enabled": false,
+      "bot_token": "", "chat_ids": [], "commands": true }
+  ],
+
+  "routes": {
+    "sms": ["tg"]
+  }
+}
