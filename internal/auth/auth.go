@@ -140,7 +140,18 @@ func (a *Authenticator) Authenticate(r *http.Request) (*Principal, error) {
 		return nil, ErrBadToken
 	}
 	if a.access != nil {
-		if jwt := r.Header.Get("Cf-Access-Jwt-Assertion"); jwt != "" {
+		jwt := r.Header.Get("Cf-Access-Jwt-Assertion")
+		if jwt == "" {
+			// On paths where Access is bypassed, Cloudflare adds no header, but the
+			// browser still sends the Access session cookie, which holds the same signed JWT.
+			if c, err := r.Cookie("CF_Authorization"); err == nil && c.Value != "" {
+				if !sameOrigin(r) {
+					return nil, ErrCrossSite
+				}
+				jwt = c.Value
+			}
+		}
+		if jwt != "" {
 			id, err := a.access.Verify(r.Context(), jwt)
 			if err != nil {
 				return nil, fmt.Errorf("access: %w", err)
@@ -149,6 +160,26 @@ func (a *Authenticator) Authenticate(r *http.Request) (*Principal, error) {
 		}
 	}
 	return nil, ErrNoCredentials
+}
+
+var ErrCrossSite = errors.New("cross-site request with session cookie")
+
+// sameOrigin guards cookie-authenticated requests against CSRF: state-changing
+// requests must come from this site. Safe methods are always allowed.
+func sameOrigin(r *http.Request) bool {
+	if r.Method == http.MethodGet || r.Method == http.MethodHead {
+		return true
+	}
+	switch r.Header.Get("Sec-Fetch-Site") {
+	case "same-origin":
+		return true
+	case "":
+		// Older browsers: fall back to Origin, which must match the host.
+		o := r.Header.Get("Origin")
+		return o != "" && (o == "https://"+r.Host || o == "http://"+r.Host)
+	default:
+		return false
+	}
 }
 
 func bearer(r *http.Request) (string, bool) {

@@ -143,3 +143,57 @@ func TestFilterKinds(t *testing.T) {
 		t.Errorf("disallowed request: want empty, got %v", got)
 	}
 }
+
+func TestAccessCookie(t *testing.T) {
+	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	certs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{"keys": []map[string]string{{
+			"kid": "k1", "kty": "RSA", "n": b64(key.N.Bytes()), "e": b64(big.NewInt(int64(key.E)).Bytes()),
+		}}})
+	}))
+	defer certs.Close()
+	v := NewAccessVerifier(AccessConfig{TeamDomain: "team.cloudflareaccess.com", AUD: "aud123"})
+	v.certURL = certs.URL
+	a, err := New(nil, v, []string{ScopeMessagesRead, ScopeMessagesDelete}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jwt := sign(t, key, "k1", map[string]any{
+		"aud": "aud123", "iss": "https://team.cloudflareaccess.com",
+		"exp": time.Now().Add(time.Hour).Unix(), "email": "me@example.com",
+	})
+
+	req := func(method string, hdr map[string]string) *http.Request {
+		r := httptest.NewRequest(method, "https://msg.example.com/api/v1/messages/1", nil)
+		r.AddCookie(&http.Cookie{Name: "CF_Authorization", Value: jwt})
+		for k, v := range hdr {
+			r.Header.Set(k, v)
+		}
+		return r
+	}
+	cases := []struct {
+		name   string
+		r      *http.Request
+		wantOK bool
+	}{
+		{"GET with cookie", req("GET", nil), true},
+		{"DELETE same-origin", req("DELETE", map[string]string{"Sec-Fetch-Site": "same-origin"}), true},
+		{"DELETE cross-site", req("DELETE", map[string]string{"Sec-Fetch-Site": "cross-site"}), false},
+		{"DELETE same-site subdomain", req("DELETE", map[string]string{"Sec-Fetch-Site": "same-site"}), false},
+		{"DELETE matching Origin", req("DELETE", map[string]string{"Origin": "https://msg.example.com"}), true},
+		{"DELETE foreign Origin", req("DELETE", map[string]string{"Origin": "https://evil.example"}), false},
+		{"DELETE no origin info", req("DELETE", nil), false},
+	}
+	for _, c := range cases {
+		p, err := a.Authenticate(c.r)
+		if ok := err == nil && p.Name == "me@example.com" && p.Via == "access"; ok != c.wantOK {
+			t.Errorf("%s: got %+v, %v", c.name, p, err)
+		}
+	}
+	// The header still wins when present (normal, non-bypassed paths).
+	r := httptest.NewRequest("POST", "/", nil)
+	r.Header.Set("Cf-Access-Jwt-Assertion", jwt)
+	if _, err := a.Authenticate(r); err != nil {
+		t.Errorf("header: %v", err)
+	}
+}

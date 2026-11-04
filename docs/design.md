@@ -184,6 +184,10 @@ token 统一一种写法：
 - `kinds` 限制这个 token 能读写哪些类型；不写表示全部。
 - token 的 `name` 就是写入消息时的 `source`。
 - 网页登录走 Cloudflare Access，服务端校验 JWT。登录用户的权限在 `access.scopes` 里配置，默认 `["messages:read", "messages:delete", "deliveries:write"]`。
+- Cloudflare 侧有两个 Access 应用：`msg.example.com` 只允许指定邮箱用验证码登录；`msg.example.com/api/v1/messages` 设为 Bypass，
+  让手机等无法交互登录的客户端只凭 token 访问。
+- Bypass 路径上 Cloudflare 不附加 `Cf-Access-Jwt-Assertion` 头，所以服务端也接受浏览器自带的 `CF_Authorization` cookie（同一份签名 JWT）。
+  用 cookie 认证时，非 GET/HEAD 请求必须同源（`Sec-Fetch-Site: same-origin`，或 `Origin` 与 Host 一致），防止 CSRF。
 - token 只通过 `Authorization: Bearer` 传递，不接受放在 URL 里。
 
 ## 6. 投递与路由
