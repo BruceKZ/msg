@@ -537,3 +537,9 @@ docs/design.md              设计文档
 
 测试覆盖：并发去重、权限和类型隔离、所有错误码、翻页、重试与重投、渠道增删改与热更新、路由、密钥不外泄、
 token 生成/使用/吊销、Access JWT（伪造、篡改、过期、错 audience）、cookie 认证的 CSRF 检查、Telegram/Discord 格式与错误处理、配置校验。
+
+---
+
+## License
+
+[MIT](LICENSE)
