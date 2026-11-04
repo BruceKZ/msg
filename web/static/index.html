@@ -19,13 +19,19 @@
 [hidden]{display:none!important}
 body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
 header{position:sticky;top:0;z-index:2;background:var(--bg);border-bottom:1px solid var(--line);padding:12px 16px}
-.bar{max-width:760px;margin:0 auto;display:flex;gap:8px;align-items:center}
+.bar{max-width:760px;margin:0 auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 h1{font-size:17px;margin:0;white-space:nowrap}
-input[type=search],select{min-width:0;padding:8px 10px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--fg);font:inherit}
+nav{display:flex;gap:2px;background:var(--chip);border-radius:10px;padding:2px}
+nav a{padding:4px 12px;border-radius:8px;color:var(--muted);text-decoration:none;font-size:14px}
+nav a.on{background:var(--card);color:var(--fg)}
+.filters{display:flex;gap:8px;flex:1;min-width:240px}
+input,select,textarea{min-width:0;padding:8px 10px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--fg);font:inherit}
 input[type=search]{flex:1}
+input[type=checkbox],input[type=radio]{width:auto;padding:0}
 main{max-width:760px;margin:0 auto;padding:12px 16px 40px}
 .status{color:var(--muted);font-size:13px;margin:4px 0 12px;display:flex;justify-content:space-between;gap:8px}
-.msg{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 14px;margin-bottom:10px;transition:background 1.5s}
+.card,.msg{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 14px;margin-bottom:10px}
+.msg{transition:background 1.5s}
 .msg.new{background:var(--new)}
 .msg.high{border-left:4px solid var(--hi)}
 .head{display:flex;justify-content:space-between;gap:10px;align-items:baseline}
@@ -35,36 +41,66 @@ main{max-width:760px;margin:0 auto;padding:12px 16px 40px}
 .fields{margin:6px 0 0;font-size:13px;color:var(--muted);display:grid;grid-template-columns:auto 1fr;gap:0 10px}
 .fields dt{white-space:nowrap}.fields dd{margin:0;overflow-wrap:anywhere;color:var(--fg)}
 .foot{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:8px;font-size:12px;color:var(--muted)}
-.chip{background:var(--chip);border-radius:999px;padding:1px 8px}
-.chip.sent{color:var(--ok)}.chip.failed{color:var(--bad)}.chip.pending{color:var(--wait)}
-.foot .grow{flex:1}
-.foot button{border:0;background:none;color:var(--accent);font:inherit;cursor:pointer;padding:2px 4px}
-.foot button.danger{color:var(--bad)}
+.chip{background:var(--chip);border-radius:999px;padding:1px 8px;font-size:12px}
+.chip.sent,.chip.active{color:var(--ok)}.chip.failed,.chip.error{color:var(--bad)}.chip.pending{color:var(--wait)}.chip.disabled{color:var(--muted)}
+.grow{flex:1}
+button.link{border:0;background:none;color:var(--accent);font:inherit;cursor:pointer;padding:2px 4px}
+button.link.danger{color:var(--bad)}
+button.btn{padding:7px 14px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--fg);font:inherit;cursor:pointer}
+button.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button:disabled{opacity:.5;cursor:default}
 a{color:var(--accent)}
-button.more{display:block;margin:16px auto;padding:8px 18px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--fg);font:inherit;cursor:pointer}
+button.more{display:block;margin:16px auto}
 .empty{text-align:center;color:var(--muted);padding:40px 0}
-#login{max-width:360px;margin:60px auto;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px}
-#login input{width:100%;padding:8px 12px;margin:10px 0;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--fg);font:inherit}
-#login button{padding:8px 16px;border-radius:10px;border:0;background:var(--accent);color:#fff;font:inherit;cursor:pointer}
+#login{max-width:360px;margin:60px auto}
+#login input{width:100%;margin:10px 0}
+h2{font-size:16px;margin:22px 0 4px}
+.sub{color:var(--muted);font-size:13px;margin:0 0 12px}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.form{display:grid;gap:12px;margin-top:10px;padding-top:12px;border-top:1px solid var(--line)}
+.form label{display:grid;gap:4px;font-size:14px}
+.form label.inline{display:flex;gap:8px;align-items:center}
+.help{color:var(--muted);font-size:12px}
+.err{color:var(--bad);font-size:13px}
+.ok{color:var(--ok);font-size:13px}
+.chats{border:1px dashed var(--line);border-radius:10px;padding:8px 10px;font-size:13px}
+.chats .row{justify-content:space-between;padding:3px 0}
+.routes .row{gap:12px}
 </style>
 </head>
 <body>
 <header><div class="bar">
   <h1>📨 msg</h1>
-  <select id="kind" aria-label="类型"><option value="">全部类型</option></select>
-  <input type="search" id="q" placeholder="搜索标题或内容" autocomplete="off">
+  <nav id="nav" hidden><a href="#" id="navMsgs" class="on">消息</a><a href="#settings" id="navSettings">设置</a></nav>
+  <div class="filters" id="filters">
+    <select id="kind" aria-label="类型"><option value="">全部类型</option></select>
+    <input type="search" id="q" placeholder="搜索标题或内容" autocomplete="off">
+  </div>
 </div></header>
 <main>
-  <div id="login" hidden>
+  <div id="login" class="card" hidden>
     <b>需要登录</b>
-    <p style="color:var(--muted);font-size:13px;margin:6px 0">没有检测到 Cloudflare Access 登录，可以输入一个有 messages:read 权限的 token：</p>
+    <p class="sub" style="margin-top:6px">没有检测到 Cloudflare Access 登录，可以输入一个有 messages:read 权限的 token：</p>
     <input type="password" id="tok" placeholder="token" autocomplete="off">
-    <button id="tokBtn">进入</button>
+    <button class="btn primary" id="tokBtn">进入</button>
   </div>
+
   <div id="app" hidden>
     <div class="status"><span id="who"></span><span id="live"></span></div>
     <div id="list"></div>
-    <button class="more" id="more" hidden>加载更多</button>
+    <button class="btn more" id="more" hidden>加载更多</button>
+  </div>
+
+  <div id="settings" hidden>
+    <h2>发送渠道</h2>
+    <p class="sub">消息会转发到这些渠道。修改后立即生效。密钥保存后不会再显示。</p>
+    <div id="senderList"></div>
+    <div class="row"><button class="btn" id="addSender">+ 添加渠道</button></div>
+    <div id="newSender"></div>
+
+    <h2>路由</h2>
+    <p class="sub">每种消息默认发给哪些渠道。提交消息时也可以用 <code>senders</code> 单独指定。</p>
+    <div id="routes" class="routes"></div>
   </div>
 </main>
 <script>
@@ -73,6 +109,7 @@ button.more{display:block;margin:16px auto;padding:8px 18px;border-radius:10px;b
   const API = '/api/v1';
   const PAGE = 50;
   const STATUS = { sent: '✓', pending: '…', failed: '✗' };
+  const SENDER_STATUS = { active: '运行中', disabled: '已停用', error: '出错' };
   let token = null;
   try { token = localStorage.getItem('msg.token'); } catch {}
   let me = null, newestId = 0, oldestId = 0, timer = null;
@@ -84,11 +121,15 @@ button.more{display:block;margin:16px auto;padding:8px 18px;border-radius:10px;b
     if (r.status === 401) throw Object.assign(new Error('unauthorized'), { auth: true });
     if (r.status === 204) return null;
     const body = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(body.error?.message || 'HTTP ' + r.status);
+    if (!r.ok) throw Object.assign(new Error(body.error?.message || 'HTTP ' + r.status), { field: body.error?.field, code: body.error?.code });
     return body;
   }
   const can = (scope) => me?.scopes?.includes(scope);
+  const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+  const btn = (text, cls, onclick) => Object.assign(el('button', cls || 'link', text), { type: 'button', onclick });
+  const errText = (e) => (e.field ? e.field + '：' : '') + e.message;
 
+  // ---------- messages ----------
   const fmt = new Intl.DateTimeFormat(undefined, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
   function ago(t) {
     const s = Math.round((Date.now() - t) / 1000);
@@ -97,13 +138,11 @@ button.more{display:block;margin:16px auto;padding:8px 18px;border-radius:10px;b
     if (s < 86400) return Math.floor(s / 3600) + ' 小时前';
     return Math.floor(s / 86400) + ' 天前';
   }
-  const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 
   function render(m, fresh) {
     const e = m.envelope, t = Date.parse(e.time);
     const card = el('div', 'msg' + (fresh ? ' new' : '') + (e.priority === 'high' ? ' high' : ''));
-    card.dataset.id = m.id; card.dataset.ts = t;
-
+    card.dataset.ts = t;
     const head = el('div', 'head');
     head.append(el('span', 'title', e.title || '(无标题)'), Object.assign(el('span', 'time', ago(t)), { title: fmt.format(t) }));
     card.append(head);
@@ -117,25 +156,21 @@ button.more{display:block;margin:16px auto;padding:8px 18px;border-radius:10px;b
       const a = el('a', '', '详情'); a.href = e.link; a.target = '_blank'; a.rel = 'noopener noreferrer';
       card.append(a);
     }
-
     const foot = el('div', 'foot');
     foot.append(el('span', 'chip', m.kind), el('span', '', m.source), el('span', '', fmt.format(t) + ' · #' + m.id));
-    for (const [snd, st] of Object.entries(m.deliveries || {})) {
-      foot.append(Object.assign(el('span', 'chip ' + st, snd + ' ' + (STATUS[st] || st)), { title: st }));
-    }
+    for (const [snd, st] of Object.entries(m.deliveries || {})) foot.append(Object.assign(el('span', 'chip ' + st, snd + ' ' + (STATUS[st] || st)), { title: st }));
     foot.append(el('span', 'grow'));
     if (can('deliveries:write') && Object.values(m.deliveries || {}).includes('failed')) {
-      const b = el('button', '', '重发');
-      b.onclick = async () => { try { await api(`/messages/${m.id}/deliveries`, { method: 'POST', body: '{}' }); b.textContent = '已排队'; b.disabled = true; } catch (err) { alert(err.message); } };
+      const b = btn('重发', 'link', async () => {
+        try { await api(`/messages/${m.id}/deliveries`, { method: 'POST', body: '{}' }); b.textContent = '已排队'; b.disabled = true; } catch (err) { alert(err.message); }
+      });
       foot.append(b);
     }
     if (can('messages:delete')) {
-      const b = el('button', 'danger', '删除');
-      b.onclick = async () => {
+      foot.append(btn('删除', 'link danger', async () => {
         if (!confirm('删除这条消息？')) return;
         try { await api(`/messages/${m.id}`, { method: 'DELETE' }); card.remove(); } catch (err) { alert(err.message); }
-      };
-      foot.append(b);
+      }));
     }
     card.append(foot);
     if (fresh) setTimeout(() => card.classList.remove('new'), 3000);
@@ -148,7 +183,6 @@ button.more{display:block;margin:16px auto;padding:8px 18px;border-radius:10px;b
     if (filter.q) p.set('q', filter.q);
     return '/messages?' + p;
   }
-
   async function load() {
     const { items, next_before } = await api(query({}));
     const list = $('list'); list.replaceChildren();
@@ -158,15 +192,14 @@ button.more{display:block;margin:16px auto;padding:8px 18px;border-radius:10px;b
     oldestId = next_before || 0;
     $('more').hidden = !next_before;
   }
-
   async function loadMore() {
     const { items, next_before } = await api(query({ before: oldestId }));
     items.forEach(m => $('list').append(render(m)));
     oldestId = next_before || 0;
     $('more').hidden = !next_before;
   }
-
   async function poll() {
+    if (location.hash === '#settings') return;
     try {
       const { items } = await api(query(newestId ? { since: newestId } : {}));
       const fresh = items.filter(m => m.id > newestId);
@@ -177,10 +210,210 @@ button.more{display:block;margin:16px auto;padding:8px 18px;border-radius:10px;b
         if (document.hidden) document.title = '(' + fresh.length + ') msg';
       }
       $('live').textContent = '● 实时';
-    } catch {
-      $('live').textContent = '○ 连接中断';
-    }
+    } catch { $('live').textContent = '○ 连接中断'; }
     document.querySelectorAll('.msg').forEach(c => c.querySelector('.time').textContent = ago(+c.dataset.ts));
+  }
+
+  // ---------- settings ----------
+  let types = [], senderItems = [];
+
+  async function loadSettings() {
+    const [t, s] = await Promise.all([api('/sender-types'), api('/senders')]);
+    types = t.items; senderItems = s.items;
+    renderSenders();
+    await loadRoutes();
+  }
+
+  function renderSenders() {
+    const box = $('senderList'); box.replaceChildren();
+    if (!senderItems.length) box.append(el('div', 'empty', '还没有渠道，点下面添加一个。'));
+    for (const s of senderItems) box.append(senderCard(s));
+  }
+
+  function typeOf(name) { return types.find(t => t.name === name); }
+
+  function senderCard(s) {
+    const t = typeOf(s.type);
+    const card = el('div', 'card');
+    const head = el('div', 'row');
+    head.append(el('b', '', s.name), el('span', 'chip', t?.label || s.type), el('span', 'chip ' + s.status, SENDER_STATUS[s.status] || s.status), el('span', 'grow'));
+    const result = el('span', '');
+    head.append(
+      btn('测试', 'link', async () => {
+        result.className = ''; result.textContent = '发送中…';
+        try {
+          const r = await api(`/senders/${encodeURIComponent(s.name)}/test`, { method: 'POST' });
+          result.className = r.ok ? 'ok' : 'err'; result.textContent = r.ok ? '已发送，请查收' : '失败：' + r.error;
+        } catch (e) { result.className = 'err'; result.textContent = errText(e); }
+      }),
+      btn(s.enabled ? '停用' : '启用', 'link', () => saveSender(s.name, { enabled: !s.enabled })),
+      btn('编辑', 'link', () => { form.hidden = !form.hidden; }),
+      btn('删除', 'link danger', async () => {
+        if (!confirm(`删除渠道 ${s.name}？路由里引用它的地方也会一并去掉。`)) return;
+        try { await api(`/senders/${encodeURIComponent(s.name)}`, { method: 'DELETE' }); await loadSettings(); } catch (e) { alert(errText(e)); }
+      }),
+    );
+    card.append(head);
+    if (s.status === 'error' && s.error) card.append(el('div', 'err', s.error));
+    card.append(result);
+    const form = senderForm(t, s);
+    form.hidden = !(s.status === 'active' && s.can_list_chats && !(s.config?.chat_ids || []).length);
+    card.append(form);
+    return card;
+  }
+
+  // senderForm renders the type's fields. existing = null for a new sender.
+  function senderForm(t, existing) {
+    const form = el('div', 'form');
+    const inputs = {};
+    let typeSel, nameInput, enabledBox;
+
+    if (!existing) {
+      typeSel = el('select');
+      for (const ty of types) typeSel.append(Object.assign(el('option', '', ty.label), { value: ty.name }));
+      typeSel.value = t.name;
+      typeSel.onchange = () => { const f = senderForm(typeOf(typeSel.value), null); f.className = form.className; form.replaceWith(f); };
+      const l1 = el('label', '', '类型'); l1.append(typeSel, el('span', 'help', t.description));
+      nameInput = Object.assign(el('input'), { placeholder: '例如 tg、discord-home', autocomplete: 'off' });
+      const l2 = el('label', '', '名称'); l2.append(nameInput, el('span', 'help', '小写字母、数字、- 或 _，之后不能修改；路由和 API 里用这个名字。'));
+      form.append(l1, l2);
+    } else if (t?.description) {
+      form.append(el('div', 'help', t.description));
+    }
+
+    for (const f of t?.fields || []) {
+      const cur = existing?.config?.[f.name];
+      let input;
+      if (f.kind === 'bool') {
+        input = Object.assign(el('input'), { type: 'checkbox', checked: !!cur });
+        const l = el('label', 'inline'); l.append(input, el('span', '', f.label));
+        form.append(l);
+        if (f.help) form.append(el('div', 'help', f.help));
+      } else {
+        input = el('input');
+        if (f.kind === 'secret') {
+          input.type = 'password'; input.autocomplete = 'off';
+          input.placeholder = existing?.secrets_set?.includes(f.name) ? '已设置；留空则不修改' : (f.required ? '必填' : '');
+        } else if (f.kind === 'int_list') {
+          input.value = (cur || []).join(', '); input.placeholder = '多个用逗号分隔';
+        } else {
+          input.value = cur || '';
+        }
+        const l = el('label', '', f.label + (f.required ? ' *' : '')); l.append(input);
+        if (f.help) l.append(el('span', 'help', f.help));
+        form.append(l);
+      }
+      inputs[f.name] = { f, input };
+    }
+
+    enabledBox = Object.assign(el('input'), { type: 'checkbox', checked: existing ? existing.enabled : true });
+    const le = el('label', 'inline'); le.append(enabledBox, el('span', '', '启用'));
+    form.append(le);
+
+    // Telegram-style helper: pick chat ids from chats that recently messaged the bot.
+    const listField = Object.values(inputs).find(x => x.f.kind === 'int_list');
+    if (existing && existing.can_list_chats && listField) {
+      const box = el('div', 'chats');
+      const list = el('div');
+      const refresh = async () => {
+        list.replaceChildren(el('div', 'help', '加载中…'));
+        try {
+          const { items } = await api(`/senders/${encodeURIComponent(existing.name)}/chats`);
+          list.replaceChildren();
+          if (!items.length) list.append(el('div', 'help', '还没有会话。先在 Telegram 里给这个 bot 发一句话，然后点“刷新”。'));
+          for (const c of items) {
+            const row = el('div', 'row');
+            row.append(el('span', '', `${c.title || '(无名)'} · ${c.type} · ${c.id}`));
+            row.append(btn('加入', 'link', () => {
+              const ids = listField.input.value.split(/[,\s]+/).filter(Boolean);
+              if (!ids.includes(String(c.id))) ids.push(String(c.id));
+              listField.input.value = ids.join(', ');
+            }));
+            list.append(row);
+          }
+        } catch (e) { list.replaceChildren(el('div', 'err', errText(e))); }
+      };
+      const head = el('div', 'row'); head.append(el('b', '', '最近的会话'), el('span', 'grow'), btn('刷新', 'link', refresh));
+      box.append(head, list);
+      form.append(box);
+      refresh();
+    } else if (!existing && t?.name === 'telegram') {
+      form.append(el('div', 'help', '保存后，给 bot 发一句话，再点“编辑”从“最近的会话”里添加 Chat ID。'));
+    }
+
+    const msg = el('div', '');
+    const save = btn('保存', 'btn primary', async () => {
+      const config = {};
+      for (const [name, { f, input }] of Object.entries(inputs)) {
+        if (f.kind === 'bool') config[name] = input.checked;
+        else if (f.kind === 'int_list') config[name] = input.value;
+        else if (f.kind === 'secret') { if (input.value.trim()) config[name] = input.value.trim(); }
+        else config[name] = input.value;
+      }
+      msg.className = ''; msg.textContent = '保存中…'; save.disabled = true;
+      try {
+        if (existing) await api(`/senders/${encodeURIComponent(existing.name)}`, { method: 'PATCH', body: JSON.stringify({ enabled: enabledBox.checked, config }) });
+        else await api('/senders', { method: 'POST', body: JSON.stringify({ name: nameInput.value.trim(), type: typeSel.value, enabled: enabledBox.checked, config }) });
+        $('newSender').replaceChildren();
+        await loadSettings();
+      } catch (e) { msg.className = 'err'; msg.textContent = errText(e); save.disabled = false; }
+    });
+    const actions = el('div', 'row'); actions.append(save);
+    if (!existing) actions.append(btn('取消', 'btn', () => $('newSender').replaceChildren()));
+    form.append(actions, msg);
+    return form;
+  }
+
+  async function saveSender(name, change) {
+    try { await api(`/senders/${encodeURIComponent(name)}`, { method: 'PATCH', body: JSON.stringify(change) }); await loadSettings(); }
+    catch (e) { alert(errText(e)); }
+  }
+
+  async function loadRoutes() {
+    const { items } = await api('/routes');
+    const box = $('routes'); box.replaceChildren();
+    for (const r of items) {
+      const card = el('div', 'card');
+      const head = el('div', 'row'); head.append(el('b', '', r.kind), el('span', 'grow'),
+        el('span', 'help', '当前发往：' + (r.effective.length ? r.effective.join(', ') : '（不推送）')));
+      card.append(head);
+      const name = 'route-' + r.kind;
+      const all = Object.assign(el('input'), { type: 'radio', name, checked: !r.custom });
+      const pick = Object.assign(el('input'), { type: 'radio', name, checked: r.custom });
+      const la = el('label', 'inline'); la.append(all, el('span', '', '所有启用的渠道（默认）'));
+      const lp = el('label', 'inline'); lp.append(pick, el('span', '', '只发给：'));
+      const boxes = el('div', 'row');
+      const checks = senderItems.map(s => {
+        const c = Object.assign(el('input'), { type: 'checkbox', checked: (r.senders || []).includes(s.name) });
+        const l = el('label', 'inline'); l.append(c, el('span', '', s.name + (s.status === 'active' ? '' : '（' + (SENDER_STATUS[s.status] || s.status) + '）')));
+        boxes.append(l);
+        c.onchange = () => { pick.checked = true; };
+        return [s.name, c];
+      });
+      const msg = el('span', '');
+      const save = btn('保存', 'btn', async () => {
+        const body = all.checked ? { senders: null } : { senders: checks.filter(([, c]) => c.checked).map(([n]) => n) };
+        try { await api('/routes/' + encodeURIComponent(r.kind), { method: 'PUT', body: JSON.stringify(body) }); await loadRoutes(); }
+        catch (e) { msg.className = 'err'; msg.textContent = errText(e); }
+      });
+      const form = el('div', 'form'); form.append(la, lp, boxes, el('div', 'row'));
+      form.lastChild.append(save, msg);
+      card.append(form);
+      box.append(card);
+    }
+  }
+
+  $('addSender').onclick = () => {
+    if (!types.length) return;
+    $('newSender').replaceChildren(Object.assign(senderForm(types.find(t => t.name === 'telegram') || types[0], null), { className: 'form card' }));
+  };
+
+  // ---------- views ----------
+  async function show() {
+    const settings = location.hash === '#settings' && can('senders:write');
+    $('app').hidden = settings; $('settings').hidden = !settings; $('filters').hidden = settings;
+    $('navMsgs').classList.toggle('on', !settings); $('navSettings').classList.toggle('on', settings);
+    if (settings) { try { await loadSettings(); } catch (e) { $('senderList').replaceChildren(el('div', 'err', errText(e))); } }
   }
 
   async function start() {
@@ -188,31 +421,29 @@ button.more{display:block;margin:16px auto;padding:8px 18px;border-radius:10px;b
       me = await api('/me');
       $('who').textContent = (me.via === 'token' ? 'token: ' : '') + me.name;
       const { items } = await api('/kinds');
-      const sel = $('kind');
-      sel.length = 1;
+      const sel = $('kind'); sel.length = 1;
       for (const k of items) sel.append(Object.assign(el('option', '', k.name + ' · ' + k.description), { value: k.name }));
-      $('login').hidden = true; $('app').hidden = false;
+      $('login').hidden = true;
+      $('nav').hidden = !can('senders:write');
       await load();
       clearInterval(timer); timer = setInterval(poll, 5000);
+      await show();
     } catch (e) {
       if (e.auth) {
         if (token) { token = null; try { localStorage.removeItem('msg.token'); } catch {} }
-        $('app').hidden = true; $('login').hidden = false;
+        $('app').hidden = true; $('settings').hidden = true; $('login').hidden = false;
       } else {
         $('app').hidden = false; $('list').replaceChildren(el('div', 'empty', '加载失败：' + e.message));
       }
     }
   }
 
+  window.addEventListener('hashchange', show);
   let debounce;
   $('q').oninput = () => { clearTimeout(debounce); debounce = setTimeout(() => { filter.q = $('q').value.trim(); load(); }, 250); };
   $('kind').onchange = () => { filter.kind = $('kind').value; load(); };
   $('more').onclick = loadMore;
-  $('tokBtn').onclick = () => {
-    token = $('tok').value.trim();
-    try { localStorage.setItem('msg.token', token); } catch {}
-    start();
-  };
+  $('tokBtn').onclick = () => { token = $('tok').value.trim(); try { localStorage.setItem('msg.token', token); } catch {} start(); };
   $('tok').onkeydown = (e) => { if (e.key === 'Enter') $('tokBtn').click(); };
   document.addEventListener('visibilitychange', () => { if (!document.hidden) document.title = 'msg'; });
   start();

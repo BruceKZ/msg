@@ -17,6 +17,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"slices"
+	"sort"
 	"syscall"
 	"time"
 	_ "time/tzdata" // OpenWrt ships no zoneinfo database
@@ -27,6 +28,8 @@ import (
 	"msg/internal/dispatch"
 	"msg/internal/hub"
 	"msg/internal/kinds/sms"
+	"msg/internal/senders"
+	"msg/internal/senders/discord"
 	"msg/internal/senders/telegram"
 	"msg/internal/store"
 	"msg/web"
@@ -39,6 +42,12 @@ func availableKinds() []core.Kind {
 	return []core.Kind{sms.New()}
 }
 
+// senderTypes lists every sender type compiled into the binary. Sender
+// instances themselves are configured at runtime (web settings / API).
+func senderTypes() []senders.Type {
+	return []senders.Type{telegram.Type(), discord.Type()}
+}
+
 type Config struct {
 	Listen   string        `json:"listen"`
 	DBPath   string        `json:"db_path"`
@@ -49,8 +58,6 @@ type Config struct {
 		Enabled            *bool `json:"enabled"`
 		DedupWindowSeconds *int  `json:"dedup_window_seconds"`
 	} `json:"kinds"`
-	Senders []json.RawMessage   `json:"senders"`
-	Routes  map[string][]string `json:"routes"`
 }
 
 type AccessConfig struct {
@@ -73,7 +80,7 @@ func main() {
 		return
 	case "check":
 		log := slog.New(slog.NewTextHandler(os.Stderr, nil))
-		if _, err := build(*cfgPath, log, true); err != nil {
+		if _, err := build(context.Background(), *cfgPath, log, true); err != nil {
 			fmt.Fprintln(os.Stderr, "config error:", err)
 			os.Exit(1)
 		}
@@ -114,12 +121,12 @@ type app struct {
 	hub        *hub.Hub
 	dispatcher *dispatch.Dispatcher
 	server     *http.Server
-	background []func(context.Context)
 }
 
 // build assembles everything from the config. With dryRun the database is
-// opened in memory so the real one is not touched.
-func build(cfgPath string, log *slog.Logger, dryRun bool) (*app, error) {
+// opened in memory so the real one is not touched. Background work of
+// senders stops when ctx is cancelled.
+func build(ctx context.Context, cfgPath string, log *slog.Logger, dryRun bool) (*app, error) {
 	cfg, err := loadConfig(cfgPath)
 	if err != nil {
 		return nil, err
@@ -163,86 +170,27 @@ func build(cfgPath string, log *slog.Logger, dryRun bool) (*app, error) {
 		}
 	}
 
-	// Senders
-	var senders []core.Sender
-	var infos []api.SenderInfo
-	var bots []*telegram.Bot
-	enabled := map[string]bool{}
-	for i, raw := range cfg.Senders {
-		var head struct {
-			Type    string `json:"type"`
-			Name    string `json:"name"`
-			Enabled *bool  `json:"enabled"`
-		}
-		if err := json.Unmarshal(raw, &head); err != nil {
-			return nil, fmt.Errorf("senders[%d]: %w", i, err)
-		}
-		if head.Name == "" {
-			return nil, fmt.Errorf("senders[%d]: name is required", i)
-		}
-		if slices.ContainsFunc(infos, func(s api.SenderInfo) bool { return s.Name == head.Name }) {
-			return nil, fmt.Errorf("senders[%d]: duplicate name %q", i, head.Name)
-		}
-		on := head.Enabled == nil || *head.Enabled
-		infos = append(infos, api.SenderInfo{Name: head.Name, Type: head.Type, Enabled: on})
-		switch head.Type {
-		case "telegram":
-		default:
-			return nil, fmt.Errorf("senders[%d]: unknown type %q", i, head.Type)
-		}
-		if !on {
-			continue
-		}
-		var tc struct {
-			telegram.Config
-			Type    string `json:"type"`
-			Enabled *bool  `json:"enabled"`
-		}
-		if err := json.Unmarshal(raw, &tc); err != nil {
-			return nil, fmt.Errorf("senders[%d]: %w", i, err)
-		}
-		bot, err := telegram.New(tc.Config, loc, log.With("sender", head.Name))
-		if err != nil {
-			return nil, err
-		}
-		senders = append(senders, bot)
-		bots = append(bots, bot)
-		enabled[head.Name] = true
+	sort.Slice(kinds, func(i, j int) bool { return kinds[i].Info().Name < kinds[j].Info().Name })
+	kindNames := make([]string, len(kinds))
+	for i, k := range kinds {
+		kindNames[i] = k.Info().Name
 	}
 
-	// Routes may mention disabled senders (so a sender can be switched off
-	// without editing routes); those are dropped here. Unknown names are errors.
-	routes := map[string][]string{}
-	for kind, list := range cfg.Routes {
-		var keep []string
-		for _, s := range list {
-			if !slices.ContainsFunc(infos, func(i api.SenderInfo) bool { return i.Name == s }) {
-				return nil, fmt.Errorf("routes.%s: unknown sender %q", kind, s)
-			}
-			if enabled[s] {
-				keep = append(keep, s)
-			} else {
-				log.Warn("route skips disabled sender", "kind", kind, "sender", s)
-			}
-		}
-		if keep == nil {
-			keep = []string{}
-		}
-		routes[kind] = keep
+	// Senders are configured at runtime and stored in the database.
+	mgr, err := senders.New(ctx, st, senderTypes(), senders.Env{
+		Loc: loc, Log: log, Inbox: st, KindNames: func() []string { return slices.Clone(kindNames) },
+	})
+	if err != nil {
+		return nil, fmt.Errorf("senders: %w", err)
 	}
-
-	disp := dispatch.New(st, senders, log)
-	names := make([]string, 0, len(senders))
-	for _, s := range senders {
-		names = append(names, s.Name())
-	}
-	h, err := hub.New(st, kinds, names, hub.Options{Routes: routes, DedupWindows: windows, Wake: disp.Wake})
+	disp := dispatch.New(st, mgr, log)
+	h, err := hub.New(st, kinds, mgr, hub.Options{DedupWindows: windows, Wake: disp.Wake})
 	if err != nil {
 		return nil, err
 	}
 
 	var verifier *auth.AccessVerifier
-	accessScopes := []string{auth.ScopeMessagesRead, auth.ScopeMessagesDelete, auth.ScopeDeliveriesWrite}
+	accessScopes := []string{auth.ScopeMessagesRead, auth.ScopeMessagesDelete, auth.ScopeDeliveriesWrite, auth.ScopeSendersWrite}
 	if cfg.Access != nil {
 		if cfg.Access.TeamDomain != "" || cfg.Access.AUD != "" {
 			if cfg.Access.TeamDomain == "" || cfg.Access.AUD == "" {
@@ -260,34 +208,26 @@ func build(cfgPath string, log *slog.Logger, dryRun bool) (*app, error) {
 	}
 
 	a := &app{store: st, hub: h, dispatcher: disp}
-	for _, b := range bots {
-		b.EnableCommands(st, h.KindNames)
-		a.background = append(a.background, b.RunCommands)
-	}
 	a.server = &http.Server{
 		Addr:              cfg.Listen,
-		Handler:           api.New(h, st, authn, infos, web.FS(), log).Handler(),
+		Handler:           api.New(h, st, authn, mgr, web.FS(), log).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,
 	}
-	log.Info("configured", "kinds", h.KindNames(), "senders", names, "tokens", len(cfg.Tokens), "access", verifier != nil)
+	log.Info("configured", "kinds", h.KindNames(), "senders", mgr.ActiveNames(), "tokens", len(cfg.Tokens), "access", verifier != nil)
 	return a, nil
 }
 
 func run(cfgPath string, log *slog.Logger) error {
-	a, err := build(cfgPath, log, false)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	a, err := build(ctx, cfgPath, log, false)
 	if err != nil {
 		return err
 	}
 	defer a.store.Close()
-
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 	go a.dispatcher.Run(ctx)
-	for _, f := range a.background {
-		go f(ctx)
-	}
 	go func() {
 		<-ctx.Done()
 		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

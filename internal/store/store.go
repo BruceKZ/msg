@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -77,6 +78,19 @@ var migrations = []string{
 		UNIQUE(message_id, sender)
 	);
 	CREATE INDEX deliveries_due ON deliveries(status, next_attempt_at);`,
+	// v2: senders and routes are managed at runtime (web settings) instead of the config file.
+	`CREATE TABLE senders (
+		name       TEXT PRIMARY KEY,
+		type       TEXT NOT NULL,
+		enabled    INTEGER NOT NULL DEFAULT 1,
+		config     TEXT NOT NULL,  -- JSON, includes secrets
+		created_at INTEGER NOT NULL,
+		updated_at INTEGER NOT NULL
+	);
+	CREATE TABLE routes (
+		kind    TEXT PRIMARY KEY,
+		senders TEXT NOT NULL  -- JSON array of sender names
+	);`,
 }
 
 func Open(path string) (*Store, error) {
@@ -91,6 +105,12 @@ func Open(path string) (*Store, error) {
 	s := &Store{db: db}
 	if err := s.migrate(); err != nil {
 		return nil, fmt.Errorf("migrate: %w", err)
+	}
+	// The database holds sender secrets: keep it (and its WAL files) private.
+	if path != ":memory:" {
+		for _, p := range []string{path, path + "-wal", path + "-shm"} {
+			os.Chmod(p, 0o600)
+		}
 	}
 	return s, nil
 }

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"msg/internal/core"
+	"msg/internal/senders"
 )
 
 func TestFormatEscapes(t *testing.T) {
@@ -79,4 +80,31 @@ func asPermanent(err error, p *core.Permanent) bool {
 		*p = pe
 	}
 	return ok
+}
+
+func TestTypeAndChats(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	env := senders.Env{Loc: time.UTC, Log: log}
+	if _, err := Type().Build("tg", senders.Config{"bot_token": "nope"}, env); err == nil {
+		t.Fatal("bad token accepted")
+	}
+	s, err := Type().Build("tg", senders.Config{"bot_token": "123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "chat_ids": []int64{1}}, env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := s.(*Bot)
+	now := time.Now()
+	b.seen(senders.Chat{ID: 1, Title: "old", LastSeen: now.Add(-time.Minute)})
+	b.seen(senders.Chat{ID: 2, Title: "new", LastSeen: now})
+	b.seen(senders.Chat{ID: 1, Title: "old renamed", LastSeen: now.Add(-time.Second)})
+	cs := b.RecentChats()
+	if len(cs) != 2 || cs[0].ID != 2 || cs[1].Title != "old renamed" {
+		t.Fatalf("chats: %+v", cs)
+	}
+	for i := 0; i < 30; i++ {
+		b.seen(senders.Chat{ID: int64(100 + i), LastSeen: now.Add(time.Duration(i) * time.Second)})
+	}
+	if len(b.RecentChats()) != maxChats {
+		t.Fatalf("chat list not bounded: %d", len(b.RecentChats()))
+	}
 }

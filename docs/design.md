@@ -45,7 +45,14 @@
 | GET | `/api/v1/messages/{id}/deliveries` | `messages:read` | 该消息在各 sender 的投递记录 |
 | POST | `/api/v1/messages/{id}/deliveries` | `deliveries:write` | 重新投递，可指定 sender |
 | GET | `/api/v1/kinds` | 任意有效身份 | 已注册的类型及其 data 字段说明 |
-| GET | `/api/v1/senders` | 任意有效身份 | 已配置的 sender（不含密钥） |
+| GET | `/api/v1/senders` | 任意有效身份 | 已配置的 sender；有 `senders:write` 时附带配置（永远不含密钥） |
+| POST | `/api/v1/senders` | `senders:write` | 新建 sender：`{name, type, enabled, config}` |
+| GET / PATCH / DELETE | `/api/v1/senders/{name}` | `senders:write` | 查看 / 修改（省略的字段和空密钥保持不变）/ 删除 |
+| POST | `/api/v1/senders/{name}/test` | `senders:write` | 发一条测试消息，返回 `{ok, error}` |
+| GET | `/api/v1/senders/{name}/chats` | `senders:write` | 最近给 bot 发过消息的会话（Telegram），用于挑 chat id |
+| GET | `/api/v1/sender-types` | `senders:write` | 可用的 sender 类型及其配置字段说明 |
+| GET | `/api/v1/routes` | 任意有效身份 | 每种 kind 的默认 sender 列表与当前实际生效的列表 |
+| PUT | `/api/v1/routes/{kind}` | `senders:write` | `{"senders": [...]}` 设置；`{"senders": null}` 恢复为“全部” |
 | GET | `/api/v1/me` | 任意有效身份 | 当前身份：`{name, via, scopes, kinds}`，`kinds` 为 `null` 表示全部 |
 | GET | `/healthz` | 无 | 健康检查，不加版本前缀 |
 | GET | `/` | 页面公开，数据需鉴权 | 网页消息中心 |
@@ -180,10 +187,11 @@ token 统一一种写法：
 | `messages:read` | 查询消息、查看投递记录 |
 | `messages:delete` | 删除消息 |
 | `deliveries:write` | 重新投递 |
+| `senders:write` | 管理 sender（含密钥）和路由 |
 
 - `kinds` 限制这个 token 能读写哪些类型；不写表示全部。
 - token 的 `name` 就是写入消息时的 `source`。
-- 网页登录走 Cloudflare Access，服务端校验 JWT。登录用户的权限在 `access.scopes` 里配置，默认 `["messages:read", "messages:delete", "deliveries:write"]`。
+- 网页登录走 Cloudflare Access，服务端校验 JWT。登录用户的权限在 `access.scopes` 里配置，默认 `["messages:read", "messages:delete", "deliveries:write", "senders:write"]`。
 - Cloudflare 侧有两个 Access 应用：`msg.example.com` 只允许指定邮箱用验证码登录；`msg.example.com/api/v1/messages` 设为 Bypass，
   让手机等无法交互登录的客户端只凭 token 访问。
 - Bypass 路径上 Cloudflare 不附加 `Cf-Access-Jwt-Assertion` 头，所以服务端也接受浏览器自带的 `CF_Authorization` cookie（同一份签名 JWT）。
@@ -195,8 +203,8 @@ token 统一一种写法：
 一条消息发给哪些 sender，按下面的顺序确定：
 
 1. 请求里的 `senders`
-2. 配置里该 kind 的默认路由（`routes`）
-3. 所有启用的 sender
+2. 该 kind 的路由（网页“设置 → 路由”或 `PUT /api/v1/routes/{kind}`）；其中已停用或出错的 sender 会被跳过
+3. 所有运行中的 sender
 
 列表中有不存在或已禁用的 sender 时，提交失败并返回 `unknown_sender`，不会悄悄丢掉。
 
@@ -234,13 +242,15 @@ type Sender interface { // 出口 adapter
 ```
 
 ```
-main.go                       读配置，注册 kind 和 sender，启动 HTTP
+main.go                       读配置，注册 kind 和 sender 类型，启动 HTTP
 internal/core                 Kind、Message、Envelope、Sender 接口；Hub（提交、路由、去重）
 internal/store                SQLite：messages、deliveries 两张表，迁移
 internal/dispatch             投递调度与重试
 internal/api                  /api/v1 路由、鉴权、错误格式
 internal/kinds/sms            短信类型
-internal/senders/telegram     Telegram sender 和通用聊天命令
+internal/senders              sender 类型描述、运行时管理器（配置校验、密钥隐藏、热更新、路由）
+internal/senders/telegram     Telegram sender、聊天命令、最近会话
+internal/senders/discord      Discord Webhook sender
 web/                          网页消息中心
 ```
 
@@ -249,6 +259,16 @@ web/                          网页消息中心
 所有类型共用一张 `messages` 表：`id, kind, source, data(JSON), envelope(JSON), dedup_key, created_at`；
 另有 `deliveries` 表：`id, message_id, sender, status, attempts, last_error, next_attempt_at, updated_at`。
 各类型不需要单独建表；以后某个类型确实需要（比如通讯录），再由它自己加。
+`senders` 表（name, type, enabled, config JSON 含密钥）和 `routes` 表（kind → sender 名列表）保存运行时配置。
+数据库里有密钥，文件权限设为 0600。
+
+### Sender 的运行时管理
+
+- 每种 sender 类型声明自己的配置字段（`string`、`secret`、`int_list`、`bool`），网页据此生成表单，新增类型不用改网页。
+- `secret` 字段只写不读：API 只返回 `secrets_set` 列出哪些已设置；修改时留空表示保持原值。
+- 保存时先用新配置构建 sender，构建失败（如 token 格式不对）直接返回 `validation_failed`，不会存入坏配置。
+- 修改立即生效：旧实例停止（Telegram 的轮询会等它退出，避免两个实例抢更新），新实例启动。服务重启时从数据库恢复。
+- 删除 sender 会把它从所有路由里去掉；已排队但发往已删除/停用 sender 的投递标记为失败，可在网页上重投。
 
 ### 聊天命令（Telegram）
 
@@ -272,16 +292,14 @@ web/                          网页消息中心
   "db_path": "/mnt/ssd/msg/msg.db",
   "timezone": "Europe/Zurich",
   "tokens": [ … ],
-  "access": { "team_domain": "", "aud": "", "scopes": ["messages:read", "messages:delete", "deliveries:write"] },
+  "access": { "team_domain": "", "aud": "", "scopes": ["messages:read", "messages:delete", "deliveries:write", "senders:write"] },
   "kinds": {
     "sms": { "enabled": true, "dedup_window_seconds": 120 }
-  },
-  "senders": [
-    { "type": "telegram", "name": "tg", "enabled": true, "bot_token": "", "chat_ids": [], "commands": true }
-  ],
-  "routes": { "sms": ["tg"] }
+  }
 }
 ```
+
+配置文件只放服务本身的设置；sender 和路由在网页“设置”里管理，存在数据库中。
 
 ## 10. 第一个类型：sms
 
@@ -308,7 +326,8 @@ Content-Type: application/json
 
 - **做**：第 3 节全部接口；kind 和 sender 两种 adapter；sms 类型；Telegram sender 和通用命令；
   路由、去重、重试；token 权限和 Access 校验；网页消息中心；测试。
-- **不做**：sms 以外的类型（如通用提醒 `notice`）、其他 sender、平台专用排版、通讯录。
+- **不做**：sms 以外的类型（如通用提醒 `notice`）、平台专用排版、通讯录。
+- **已追加**：sender 改为网页配置（Telegram、Discord Webhook），见第 8 节。
 - **数据**：路由器上的旧库只有一条部署测试消息，直接建新库，不写迁移。
 - **部署**：设计定稿、代码完成并通过测试后再编译部署，替换路由器上的旧服务。
 

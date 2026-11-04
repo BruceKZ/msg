@@ -11,19 +11,10 @@
   "access": {
     "team_domain": "",
     "aud": "",
-    "scopes": ["messages:read", "messages:delete", "deliveries:write"]
+    "scopes": ["messages:read", "messages:delete", "deliveries:write", "senders:write"]
   },
 
   "kinds": {
     "sms": { "enabled": true, "dedup_window_seconds": 120 }
-  },
-
-  "senders": [
-    { "type": "telegram", "name": "tg", "enabled": false,
-      "bot_token": "", "chat_ids": [], "commands": true }
-  ],
-
-  "routes": {
-    "sms": ["tg"]
   }
 }

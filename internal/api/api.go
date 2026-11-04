@@ -17,29 +17,23 @@ import (
 	"msg/internal/auth"
 	"msg/internal/core"
 	"msg/internal/hub"
+	"msg/internal/senders"
 	"msg/internal/store"
 )
 
 const maxBody = 64 << 10
 
-// SenderInfo describes a configured sender for GET /api/v1/senders (no secrets).
-type SenderInfo struct {
-	Name    string `json:"name"`
-	Type    string `json:"type"`
-	Enabled bool   `json:"enabled"`
-}
-
 type Server struct {
 	hub     *hub.Hub
 	store   *store.Store
 	auth    *auth.Authenticator
-	senders []SenderInfo
+	senders *senders.Manager
 	web     fs.FS
 	log     *slog.Logger
 }
 
-func New(h *hub.Hub, st *store.Store, a *auth.Authenticator, senders []SenderInfo, web fs.FS, log *slog.Logger) *Server {
-	return &Server{hub: h, store: st, auth: a, senders: senders, web: web, log: log}
+func New(h *hub.Hub, st *store.Store, a *auth.Authenticator, mgr *senders.Manager, web fs.FS, log *slog.Logger) *Server {
+	return &Server{hub: h, store: st, auth: a, senders: mgr, web: web, log: log}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -54,6 +48,15 @@ func (s *Server) Handler() http.Handler {
 	route("POST /api/v1/messages/{id}/deliveries", auth.ScopeDeliveriesWrite, s.redeliver)
 	route("GET /api/v1/kinds", "", s.listKinds)
 	route("GET /api/v1/senders", "", s.listSenders)
+	route("POST /api/v1/senders", auth.ScopeSendersWrite, s.createSender)
+	route("GET /api/v1/senders/{name}", auth.ScopeSendersWrite, s.getSender)
+	route("PATCH /api/v1/senders/{name}", auth.ScopeSendersWrite, s.updateSender)
+	route("DELETE /api/v1/senders/{name}", auth.ScopeSendersWrite, s.deleteSender)
+	route("POST /api/v1/senders/{name}/test", auth.ScopeSendersWrite, s.testSender)
+	route("GET /api/v1/senders/{name}/chats", auth.ScopeSendersWrite, s.senderChats)
+	route("GET /api/v1/sender-types", auth.ScopeSendersWrite, s.senderTypes)
+	route("GET /api/v1/routes", "", s.listRoutes)
+	route("PUT /api/v1/routes/{kind}", auth.ScopeSendersWrite, s.setRoute)
 	route("GET /api/v1/me", "", s.me)
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok") })
@@ -383,8 +386,164 @@ func (s *Server) listKinds(w http.ResponseWriter, r *http.Request, p *auth.Princ
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
+// ---- senders & routes ----
+
+// listSenders shows every caller the senders' names and state; configuration
+// (never secrets) only to those who may manage senders.
 func (s *Server) listSenders(w http.ResponseWriter, r *http.Request, p *auth.Principal) {
-	writeJSON(w, http.StatusOK, map[string]any{"items": s.senders})
+	writeJSON(w, http.StatusOK, map[string]any{"items": s.senders.List(p.Has(auth.ScopeSendersWrite))})
+}
+
+func (s *Server) senderTypes(w http.ResponseWriter, r *http.Request, p *auth.Principal) {
+	writeJSON(w, http.StatusOK, map[string]any{"items": s.senders.Types()})
+}
+
+func (s *Server) decodeChange(w http.ResponseWriter, r *http.Request) (senders.Change, bool) {
+	var c senders.Change
+	r.Body = http.MaxBytesReader(w, r.Body, maxBody)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&c); err != nil {
+		return c, s.bodyErr(w, err)
+	}
+	return c, true
+}
+
+func (s *Server) senderErr(w http.ResponseWriter, op string, err error) {
+	var ve *core.ValidationError
+	switch {
+	case errors.As(err, &ve):
+		writeErr(w, http.StatusBadRequest, "validation_failed", ve.Message, ve.Field)
+	case errors.Is(err, store.ErrNotFound):
+		writeErr(w, http.StatusNotFound, "not_found", "sender not found", "")
+	case errors.Is(err, store.ErrExists):
+		writeErr(w, http.StatusConflict, "conflict", "a sender with this name already exists", "name")
+	case errors.Is(err, senders.ErrNotActive):
+		writeErr(w, http.StatusConflict, "sender_inactive", "sender is disabled or failed to start", "")
+	case errors.Is(err, senders.ErrNoChats):
+		writeErr(w, http.StatusBadRequest, "unsupported", err.Error(), "")
+	default:
+		s.internal(w, op, err)
+	}
+}
+
+func (s *Server) createSender(w http.ResponseWriter, r *http.Request, p *auth.Principal) {
+	c, ok := s.decodeChange(w, r)
+	if !ok {
+		return
+	}
+	info, err := s.senders.Create(r.Context(), c)
+	if err != nil {
+		s.senderErr(w, "create sender", err)
+		return
+	}
+	s.log.Info("sender created", "sender", info.Name, "type", info.Type, "by", p.Name)
+	w.Header().Set("Location", "/api/v1/senders/"+url.PathEscape(info.Name))
+	writeJSON(w, http.StatusCreated, info)
+}
+
+func (s *Server) getSender(w http.ResponseWriter, r *http.Request, p *auth.Principal) {
+	info, err := s.senders.Get(r.PathValue("name"), true)
+	if err != nil {
+		s.senderErr(w, "get sender", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, info)
+}
+
+func (s *Server) updateSender(w http.ResponseWriter, r *http.Request, p *auth.Principal) {
+	c, ok := s.decodeChange(w, r)
+	if !ok {
+		return
+	}
+	name := r.PathValue("name")
+	if c.Name != "" && c.Name != name {
+		writeErr(w, http.StatusBadRequest, "validation_failed", "name cannot be changed", "name")
+		return
+	}
+	info, err := s.senders.Update(r.Context(), name, c)
+	if err != nil {
+		s.senderErr(w, "update sender", err)
+		return
+	}
+	s.log.Info("sender updated", "sender", name, "enabled", info.Enabled, "by", p.Name)
+	writeJSON(w, http.StatusOK, info)
+}
+
+func (s *Server) deleteSender(w http.ResponseWriter, r *http.Request, p *auth.Principal) {
+	name := r.PathValue("name")
+	if err := s.senders.Delete(r.Context(), name); err != nil {
+		s.senderErr(w, "delete sender", err)
+		return
+	}
+	s.log.Info("sender deleted", "sender", name, "by", p.Name)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) testSender(w http.ResponseWriter, r *http.Request, p *auth.Principal) {
+	err := s.senders.Test(r.Context(), r.PathValue("name"), p.Name)
+	var ve *core.ValidationError
+	switch {
+	case err == nil:
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	case errors.Is(err, store.ErrNotFound), errors.Is(err, senders.ErrNotActive), errors.As(err, &ve):
+		s.senderErr(w, "test sender", err)
+	default:
+		// The send itself failed: report the sender's error to the caller.
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
+	}
+}
+
+func (s *Server) senderChats(w http.ResponseWriter, r *http.Request, p *auth.Principal) {
+	chats, err := s.senders.Chats(r.PathValue("name"))
+	if err != nil {
+		s.senderErr(w, "sender chats", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": chats})
+}
+
+func (s *Server) listRoutes(w http.ResponseWriter, r *http.Request, p *auth.Principal) {
+	routes := s.senders.Routes()
+	items := []map[string]any{}
+	for _, kind := range s.hub.KindNames() {
+		if !p.CanKind(kind) {
+			continue
+		}
+		list, custom := routes[kind]
+		items = append(items, map[string]any{
+			"kind": kind, "custom": custom, "senders": list, "effective": s.senders.DefaultSenders(kind),
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) setRoute(w http.ResponseWriter, r *http.Request, p *auth.Principal) {
+	kind := r.PathValue("kind")
+	if !s.hub.HasKind(kind) {
+		writeErr(w, http.StatusNotFound, "not_found", "unknown kind "+strconv.Quote(kind), "")
+		return
+	}
+	var req struct {
+		Senders *[]string `json:"senders"` // null = every sender (default)
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxBody)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		s.bodyErr(w, err)
+		return
+	}
+	var list []string
+	if req.Senders != nil {
+		list = append([]string{}, *req.Senders...)
+	}
+	if err := s.senders.SetRoute(r.Context(), kind, list); err != nil {
+		s.senderErr(w, "set route", err)
+		return
+	}
+	s.log.Info("route set", "kind", kind, "senders", list, "by", p.Name)
+	writeJSON(w, http.StatusOK, map[string]any{"kind": kind, "custom": list != nil, "senders": list, "effective": s.senders.DefaultSenders(kind)})
 }
 
 func (s *Server) me(w http.ResponseWriter, r *http.Request, p *auth.Principal) {

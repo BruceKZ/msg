@@ -2,3 +2,4 @@ dist/
 *.db
 *.db-*
 config.json
+/msg

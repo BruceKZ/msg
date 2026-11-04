@@ -17,9 +17,14 @@ import (
 
 const DefaultDedupWindow = 2 * time.Minute
 
+// Senders tells the hub which senders exist right now and where each kind goes
+// by default. It is implemented by the runtime sender manager.
+type Senders interface {
+	HasSender(name string) bool
+	DefaultSenders(kind string) []string
+}
+
 type Options struct {
-	// Routes gives each kind its default sender list. Kinds without a route go to every sender.
-	Routes map[string][]string
 	// DedupWindows overrides DefaultDedupWindow per kind; 0 disables de-duplication for that kind.
 	DedupWindows map[string]time.Duration
 	// Wake is called after a new message was queued for delivery.
@@ -30,12 +35,12 @@ type Hub struct {
 	store   *store.Store
 	kinds   map[string]core.Kind
 	order   []string // kind names, sorted
-	senders []string // enabled sender names, sorted
+	senders Senders
 	opts    Options
 }
 
-func New(st *store.Store, kinds []core.Kind, senders []string, opts Options) (*Hub, error) {
-	h := &Hub{store: st, kinds: map[string]core.Kind{}, senders: slices.Sorted(slices.Values(senders)), opts: opts}
+func New(st *store.Store, kinds []core.Kind, senders Senders, opts Options) (*Hub, error) {
+	h := &Hub{store: st, kinds: map[string]core.Kind{}, senders: senders, opts: opts}
 	for _, k := range kinds {
 		name := k.Info().Name
 		if _, dup := h.kinds[name]; dup {
@@ -45,14 +50,6 @@ func New(st *store.Store, kinds []core.Kind, senders []string, opts Options) (*H
 		h.order = append(h.order, name)
 	}
 	slices.Sort(h.order)
-	for kind, list := range opts.Routes {
-		if _, ok := h.kinds[kind]; !ok {
-			return nil, fmt.Errorf("routes: unknown kind %q", kind)
-		}
-		if err := h.checkSenders(list); err != nil {
-			return nil, fmt.Errorf("routes.%s: %w", kind, err)
-		}
-	}
 	if h.opts.Wake == nil {
 		h.opts.Wake = func() {}
 	}
@@ -61,7 +58,7 @@ func New(st *store.Store, kinds []core.Kind, senders []string, opts Options) (*H
 
 func (h *Hub) checkSenders(list []string) error {
 	for _, s := range list {
-		if !slices.Contains(h.senders, s) {
+		if !h.senders.HasSender(s) {
 			return fmt.Errorf("%w %q", core.ErrUnknownSender, s)
 		}
 	}
@@ -87,14 +84,11 @@ func (h *Hub) KindNames() []string { return slices.Clone(h.order) }
 // Wake nudges the dispatcher, e.g. after deliveries were re-queued.
 func (h *Hub) Wake() { h.opts.Wake() }
 
-func (h *Hub) HasSender(name string) bool { return slices.Contains(h.senders, name) }
+func (h *Hub) HasKind(name string) bool { _, ok := h.kinds[name]; return ok }
 
-func (h *Hub) defaultSenders(kind string) []string {
-	if r, ok := h.opts.Routes[kind]; ok {
-		return slices.Clone(r)
-	}
-	return slices.Clone(h.senders)
-}
+func (h *Hub) HasSender(name string) bool { return h.senders.HasSender(name) }
+
+func (h *Hub) defaultSenders(kind string) []string { return h.senders.DefaultSenders(kind) }
 
 type Submission struct {
 	Kind     string

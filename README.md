@@ -22,7 +22,8 @@ GET  /api/v1/messages ─▶ 网页 / 脚本 / Telegram 命令
 | DELETE | `/api/v1/messages/{id}` | `messages:delete` |
 | GET | `/api/v1/messages/{id}/deliveries` | `messages:read` |
 | POST | `/api/v1/messages/{id}/deliveries` | `deliveries:write` |
-| GET | `/api/v1/kinds`、`/api/v1/senders`、`/api/v1/me` | 任意有效身份 |
+| GET | `/api/v1/kinds`、`/api/v1/senders`、`/api/v1/routes`、`/api/v1/me` | 任意有效身份 |
+| POST/PATCH/DELETE | `/api/v1/senders[/{name}]`、`…/{name}/test`、`…/{name}/chats`、`/api/v1/sender-types`、`PUT /api/v1/routes/{kind}` | `senders:write` |
 | GET | `/healthz` | 无 |
 
 提交一条短信：
@@ -41,7 +42,10 @@ curl -X POST https://msg.example.com/api/v1/messages \
 
 - **新消息类型**：在 `internal/kinds/<name>` 实现 `core.Kind`（`Info`、`Decode`）和 `core.Message`（`Compose`，可选 `DedupKey`），
   再加进 `main.go` 的 `availableKinds()`。
-- **新渠道**：在 `internal/senders/<name>` 实现 `core.Sender`（`Name`、`Send(Envelope)`），在 `main.go` 的 sender 配置解析里注册类型。
+- **新渠道**：在 `internal/senders/<name>` 实现 `core.Sender`（`Name`、`Send(Envelope)`），并提供一个 `senders.Type`
+  （配置字段说明 + `Build`），加进 `main.go` 的 `senderTypes()`。网页设置页会自动出现这个类型的表单。
+
+渠道（Telegram、Discord 等）和路由不写在配置文件里，而是在网页“设置”页里添加、测试、启用/停用，改动立即生效。
 
 两者互不认识，也都不需要改通知核心。
 
@@ -56,7 +60,9 @@ internal/dispatch           投递与重试
 internal/auth               token + scope、Cloudflare Access JWT
 internal/api                /api/v1 和网页
 internal/kinds/sms          短信类型
-internal/senders/telegram   Telegram sender 和聊天命令
+internal/senders            sender 类型描述与运行时管理（热更新、密钥只写不读、路由）
+internal/senders/telegram   Telegram sender、聊天命令、最近会话
+internal/senders/discord    Discord Webhook sender
 web/static                  网页消息中心
 deploy/                     init 脚本、示例配置、部署脚本
 ```

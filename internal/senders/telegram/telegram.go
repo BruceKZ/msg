@@ -6,19 +6,59 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"msg/internal/core"
+	"msg/internal/senders"
 	"msg/internal/store"
 )
+
+// Type registers Telegram as a sender type that can be configured at runtime.
+func Type() senders.Type {
+	return senders.Type{
+		Name:        "telegram",
+		Label:       "Telegram",
+		Description: "通过 Telegram bot 推送；在 @BotFather 创建 bot 获取 token。",
+		Fields: []senders.Field{
+			{Name: "bot_token", Label: "Bot token", Kind: senders.FieldSecret, Required: true,
+				Help: "@BotFather 给的 token，形如 123456789:AA…"},
+			{Name: "chat_ids", Label: "Chat IDs", Kind: senders.FieldIntList,
+				Help: "接收推送的会话。先给 bot 发一句话，再从“最近的会话”里添加。"},
+			{Name: "commands", Label: "启用聊天命令", Kind: senders.FieldBool,
+				Help: "允许在上面这些会话里用 /latest、/recent 查看消息。"},
+		},
+		Build: func(name string, cfg senders.Config, env senders.Env) (core.Sender, error) {
+			tok := cfg.String("bot_token")
+			if !tokenRe.MatchString(tok) {
+				return nil, &core.ValidationError{Field: "config.bot_token", Message: "does not look like a Telegram bot token"}
+			}
+			b, err := New(Config{Name: name, BotToken: tok, ChatIDs: cfg.Ints("chat_ids"), Commands: cfg.Bool("commands"), APIBase: APIBase},
+				env.Loc, env.Log.With("sender", name))
+			if err != nil {
+				return nil, err
+			}
+			b.EnableCommands(env.Inbox, env.KindNames)
+			return b, nil
+		},
+	}
+}
+
+var tokenRe = regexp.MustCompile(`^[0-9]{5,}:[A-Za-z0-9_-]{30,}$`)
+
+// APIBase is the Telegram Bot API endpoint (overridable in tests).
+var APIBase = "https://api.telegram.org"
 
 type Config struct {
 	Name     string  `json:"name"`
@@ -28,18 +68,16 @@ type Config struct {
 	APIBase  string  `json:"api_base"` // default https://api.telegram.org
 }
 
-// Inbox is what the chat commands need to read messages.
-type Inbox interface {
-	List(ctx context.Context, f store.Filter) ([]store.Message, error)
-}
-
 type Bot struct {
 	cfg       Config
 	loc       *time.Location
 	http      *http.Client
 	log       *slog.Logger
-	inbox     Inbox
+	inbox     senders.Inbox
 	kindNames func() []string
+
+	mu    sync.Mutex
+	chats map[int64]senders.Chat
 }
 
 func New(cfg Config, loc *time.Location, log *slog.Logger) (*Bot, error) {
@@ -52,11 +90,11 @@ func New(cfg Config, loc *time.Location, log *slog.Logger) (*Bot, error) {
 	if cfg.APIBase == "" {
 		cfg.APIBase = "https://api.telegram.org"
 	}
-	return &Bot{cfg: cfg, loc: loc, http: &http.Client{Timeout: 70 * time.Second}, log: log}, nil
+	return &Bot{cfg: cfg, loc: loc, http: &http.Client{Timeout: 70 * time.Second}, log: log, chats: map[int64]senders.Chat{}}, nil
 }
 
 // EnableCommands gives the bot read access for its chat commands.
-func (b *Bot) EnableCommands(inbox Inbox, kindNames func() []string) {
+func (b *Bot) EnableCommands(inbox senders.Inbox, kindNames func() []string) {
 	b.inbox, b.kindNames = inbox, kindNames
 }
 
@@ -164,7 +202,12 @@ type update struct {
 	Message  *struct {
 		Text string `json:"text"`
 		Chat struct {
-			ID int64 `json:"id"`
+			ID        int64  `json:"id"`
+			Type      string `json:"type"`
+			Title     string `json:"title"`
+			Username  string `json:"username"`
+			FirstName string `json:"first_name"`
+			LastName  string `json:"last_name"`
 		} `json:"chat"`
 	} `json:"message"`
 }
@@ -177,13 +220,14 @@ var commands = []map[string]string{
 	{"command": "help", "description": "帮助"},
 }
 
-// RunCommands long-polls for chat commands until ctx is done.
-func (b *Bot) RunCommands(ctx context.Context) {
-	if !b.cfg.Commands || b.inbox == nil {
-		return
-	}
-	if err := b.call(ctx, "setMyCommands", map[string]any{"commands": commands}, nil); err != nil {
-		b.log.Warn("telegram setMyCommands", "err", err)
+// Run long-polls the bot's updates until ctx is done. It always records which
+// chats talk to the bot (so they can be picked in the settings) and answers
+// /id; the other commands need commands enabled and an allowed chat.
+func (b *Bot) Run(ctx context.Context) {
+	if b.cfg.Commands {
+		if err := b.call(ctx, "setMyCommands", map[string]any{"commands": commands}, nil); err != nil && ctx.Err() == nil {
+			b.log.Warn("telegram setMyCommands", "err", err)
+		}
 	}
 	var offset int64
 	for ctx.Err() == nil {
@@ -192,19 +236,69 @@ func (b *Bot) RunCommands(ctx context.Context) {
 		if err != nil {
 			if ctx.Err() == nil {
 				b.log.Warn("telegram getUpdates", "err", err)
+				wait := 10 * time.Second
+				var perm core.Permanent
+				if errors.As(err, &perm) {
+					wait = 5 * time.Minute // e.g. revoked token: don't hammer the API
+				}
 				select {
 				case <-ctx.Done():
-				case <-time.After(10 * time.Second):
+				case <-time.After(wait):
 				}
 			}
 			continue
 		}
 		for _, u := range ups {
 			offset = u.UpdateID + 1
-			if u.Message != nil {
-				b.handle(ctx, u.Message.Chat.ID, u.Message.Text)
+			if m := u.Message; m != nil {
+				title := m.Chat.Title
+				if title == "" {
+					title = strings.TrimSpace(m.Chat.FirstName + " " + m.Chat.LastName)
+				}
+				if m.Chat.Username != "" {
+					title = strings.TrimSpace(title + " @" + m.Chat.Username)
+				}
+				b.seen(senders.Chat{ID: m.Chat.ID, Title: title, Type: m.Chat.Type, LastSeen: time.Now().UTC()})
+				b.handle(ctx, m.Chat.ID, m.Text)
 			}
 		}
+	}
+}
+
+const maxChats = 20
+
+func (b *Bot) seen(c senders.Chat) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.chats[c.ID] = c
+	if len(b.chats) > maxChats {
+		var oldest int64
+		var t time.Time
+		for id, ch := range b.chats {
+			if t.IsZero() || ch.LastSeen.Before(t) {
+				oldest, t = id, ch.LastSeen
+			}
+		}
+		delete(b.chats, oldest)
+	}
+}
+
+// RecentChats lists chats that messaged the bot, most recent first.
+func (b *Bot) RecentChats() []senders.Chat {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make([]senders.Chat, 0, len(b.chats))
+	for _, c := range b.chats {
+		out = append(out, c)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].LastSeen.After(out[j].LastSeen) })
+	return out
+}
+
+// SeedChats carries recent chats over when the sender is rebuilt.
+func (b *Bot) SeedChats(cs []senders.Chat) {
+	for _, c := range cs {
+		b.seen(c)
 	}
 }
 
@@ -223,6 +317,9 @@ func (b *Bot) handle(ctx context.Context, chatID int64, text string) {
 
 	if cmd == "/id" || cmd == "/start" {
 		reply(fmt.Sprintf("chat id: <code>%d</code>", chatID))
+		return
+	}
+	if !b.cfg.Commands || b.inbox == nil {
 		return
 	}
 	if !slices.Contains(b.cfg.ChatIDs, chatID) {

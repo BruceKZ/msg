@@ -20,6 +20,7 @@ import (
 	"msg/internal/dispatch"
 	"msg/internal/hub"
 	"msg/internal/kinds/sms"
+	"msg/internal/senders"
 	"msg/internal/store"
 	"msg/web"
 )
@@ -96,16 +97,44 @@ func setup(t *testing.T) *env {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 
 	tg, dc := &fakeSender{name: "tg"}, &fakeSender{name: "dc"}
-	d := dispatch.New(st, []core.Sender{tg, dc}, log)
-	d.Backoff = []time.Duration{10 * time.Millisecond, 10 * time.Millisecond}
-	d.PollEvery = 10 * time.Millisecond
+	fakes := map[string]*fakeSender{"tg": tg, "dc": dc}
+	fakeType := senders.Type{
+		Name: "fake", Label: "Fake",
+		Fields: []senders.Field{
+			{Name: "secret", Label: "Secret", Kind: senders.FieldSecret},
+			{Name: "note", Label: "Note", Kind: senders.FieldString},
+		},
+		Build: func(name string, cfg senders.Config, _ senders.Env) (core.Sender, error) {
+			if cfg.String("note") == "bad" {
+				return nil, &core.ValidationError{Field: "config.note", Message: "bad note"}
+			}
+			if f, ok := fakes[name]; ok {
+				return f, nil
+			}
+			return &fakeSender{name: name}, nil
+		},
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
+	mgr, err := senders.New(ctx, st, []senders.Type{fakeType}, senders.Env{Loc: time.UTC, Log: log, Inbox: st, KindNames: func() []string { return nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"tg", "dc"} {
+		if _, err := mgr.Create(ctx, senders.Change{Name: n, Type: "fake", Config: json.RawMessage(`{"secret":"s3cret"}`)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := mgr.SetRoute(ctx, "sms", []string{"tg"}); err != nil {
+		t.Fatal(err)
+	}
+
+	d := dispatch.New(st, mgr, log)
+	d.Backoff = []time.Duration{10 * time.Millisecond, 10 * time.Millisecond}
+	d.PollEvery = 10 * time.Millisecond
 	go d.Run(ctx)
 
-	h, err := hub.New(st, []core.Kind{sms.New(), noteKind{}}, []string{"tg", "dc"}, hub.Options{
-		Routes: map[string][]string{"sms": {"tg"}}, Wake: d.Wake,
-	})
+	h, err := hub.New(st, []core.Kind{sms.New(), noteKind{}}, mgr, hub.Options{Wake: d.Wake})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +147,7 @@ func setup(t *testing.T) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(New(h, st, a, []SenderInfo{{"tg", "telegram", true}, {"dc", "fake", true}}, web.FS(), log).Handler())
+	srv := httptest.NewServer(New(h, st, a, mgr, web.FS(), log).Handler())
 	t.Cleanup(srv.Close)
 	return &env{t: t, url: srv.URL, tg: tg, dc: dc}
 }
@@ -425,4 +454,107 @@ func TestFormAndMeta(t *testing.T) {
 		t.Fatalf("web: %d", res.StatusCode)
 	}
 	res.Body.Close()
+}
+
+func TestSenderManagement(t *testing.T) {
+	e := setup(t)
+
+	// Readers see names and state only; managers see config but never secrets.
+	r := e.do("GET", "/api/v1/senders", tokReader, "")
+	if it := items(r)[0]; it["config"] != nil || it["status"] != "active" {
+		t.Fatalf("reader view: %v", it)
+	}
+	r = e.do("GET", "/api/v1/senders", tokAdmin, "")
+	it := items(r)[0]
+	if _, leaked := it["config"].(map[string]any)["secret"]; leaked || it["secrets_set"].([]any)[0] != "secret" {
+		t.Fatalf("admin view: %v", it)
+	}
+	raw, _ := json.Marshal(r.body)
+	if strings.Contains(string(raw), "s3cret") {
+		t.Fatal("secret value returned by the API")
+	}
+
+	cases := []struct {
+		name, method, path, token, body string
+		status                          int
+		code                            string
+	}{
+		{"reader cannot create", "POST", "/api/v1/senders", tokReader, `{"name":"x","type":"fake"}`, 403, "forbidden"},
+		{"phone cannot create", "POST", "/api/v1/senders", tokPhone, `{"name":"x","type":"fake"}`, 403, "forbidden"},
+		{"bad name", "POST", "/api/v1/senders", tokAdmin, `{"name":"Bad Name","type":"fake"}`, 400, "validation_failed"},
+		{"unknown type", "POST", "/api/v1/senders", tokAdmin, `{"name":"x","type":"pigeon"}`, 400, "validation_failed"},
+		{"unknown config field", "POST", "/api/v1/senders", tokAdmin, `{"name":"x","type":"fake","config":{"zzz":1}}`, 400, "validation_failed"},
+		{"build rejects config", "POST", "/api/v1/senders", tokAdmin, `{"name":"x","type":"fake","config":{"note":"bad"}}`, 400, "validation_failed"},
+		{"duplicate", "POST", "/api/v1/senders", tokAdmin, `{"name":"tg","type":"fake"}`, 409, "conflict"},
+		{"update missing", "PATCH", "/api/v1/senders/nope", tokAdmin, `{"enabled":false}`, 404, "not_found"},
+		{"change type", "PATCH", "/api/v1/senders/tg", tokAdmin, `{"type":"other"}`, 400, "validation_failed"},
+		{"route unknown kind", "PUT", "/api/v1/routes/fax", tokAdmin, `{"senders":["tg"]}`, 404, "not_found"},
+		{"route unknown sender", "PUT", "/api/v1/routes/sms", tokAdmin, `{"senders":["nope"]}`, 400, "validation_failed"},
+		{"chats unsupported", "GET", "/api/v1/senders/tg/chats", tokAdmin, "", 400, "unsupported"},
+		{"types need scope", "GET", "/api/v1/sender-types", tokReader, "", 403, "forbidden"},
+	}
+	for _, c := range cases {
+		r := e.do(c.method, c.path, c.token, c.body)
+		if r.status != c.status || errCode(r) != c.code {
+			t.Errorf("%s: got %d %q, want %d %q (%v)", c.name, r.status, errCode(r), c.status, c.code, r.body)
+		}
+	}
+
+	// Create a disabled sender, then enable it.
+	r = e.do("POST", "/api/v1/senders", tokAdmin, `{"name":"extra","type":"fake","enabled":false,"config":{"note":"hi"}}`)
+	if r.status != 201 || r.body["status"] != "disabled" {
+		t.Fatalf("create: %d %v", r.status, r.body)
+	}
+	if r := e.do("POST", "/api/v1/senders/extra/test", tokAdmin, ""); r.status != 409 || errCode(r) != "sender_inactive" {
+		t.Fatalf("test disabled: %d %v", r.status, r.body)
+	}
+	if r := e.do("POST", "/api/v1/messages", tokNotes, `{"kind":"note","data":{"text":"x"},"senders":["extra"]}`); errCode(r) != "unknown_sender" {
+		t.Fatalf("disabled sender accepted: %v", r.body)
+	}
+	if r := e.do("PATCH", "/api/v1/senders/extra", tokAdmin, `{"enabled":true}`); r.body["status"] != "active" || r.body["config"].(map[string]any)["note"] != "hi" {
+		t.Fatalf("enable: %v", r.body)
+	}
+
+	// Updating without the secret keeps it.
+	r = e.do("PATCH", "/api/v1/senders/tg", tokAdmin, `{"config":{"note":"changed","secret":""}}`)
+	if r.status != 200 || len(r.body["secrets_set"].([]any)) != 1 {
+		t.Fatalf("secret kept: %v", r.body)
+	}
+
+	// Test sends through the sender.
+	if r := e.do("POST", "/api/v1/senders/tg/test", tokAdmin, ""); r.body["ok"] != true || e.tg.count() != 1 {
+		t.Fatalf("test: %v", r.body)
+	}
+	e.tg.set(0, true)
+	if r := e.do("POST", "/api/v1/senders/tg/test", tokAdmin, ""); r.body["ok"] != false || r.body["error"] == "" {
+		t.Fatalf("failing test: %v", r.body)
+	}
+	e.tg.set(0, false)
+
+	// Routes: sms -> dc only, then back to default.
+	r = e.do("PUT", "/api/v1/routes/sms", tokAdmin, `{"senders":["dc"]}`)
+	if r.status != 200 || r.body["effective"].([]any)[0] != "dc" {
+		t.Fatalf("set route: %v", r.body)
+	}
+	e.do("POST", "/api/v1/messages", tokPhone, `{"kind":"sms","data":{"from":"a","body":"routed"}}`)
+	waitFor(t, func() bool { return e.dc.count() == 1 })
+	if r := e.do("PUT", "/api/v1/routes/sms", tokAdmin, `{"senders":[]}`); r.body["custom"] != true || len(r.body["effective"].([]any)) != 0 {
+		t.Fatalf("empty route: %v", r.body)
+	}
+	r = e.do("PUT", "/api/v1/routes/sms", tokAdmin, `{"senders":null}`)
+	if r.body["custom"] != false || len(r.body["effective"].([]any)) != 3 {
+		t.Fatalf("reset route: %v", r.body)
+	}
+
+	// Deleting a sender removes it from routes.
+	e.do("PUT", "/api/v1/routes/note", tokAdmin, `{"senders":["dc","tg"]}`)
+	if r := e.do("DELETE", "/api/v1/senders/dc", tokAdmin, ""); r.status != 204 {
+		t.Fatalf("delete: %d", r.status)
+	}
+	r = e.do("GET", "/api/v1/routes", tokAdmin, "")
+	for _, it := range items(r) {
+		if it["kind"] == "note" && (len(it["senders"].([]any)) != 1 || it["senders"].([]any)[0] != "tg") {
+			t.Fatalf("route after delete: %v", it)
+		}
+	}
 }

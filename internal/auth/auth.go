@@ -17,9 +17,10 @@ const (
 	ScopeMessagesRead    = "messages:read"
 	ScopeMessagesDelete  = "messages:delete"
 	ScopeDeliveriesWrite = "deliveries:write"
+	ScopeSendersWrite    = "senders:write" // manage senders (incl. their secrets) and routes
 )
 
-var AllScopes = []string{ScopeMessagesWrite, ScopeMessagesRead, ScopeMessagesDelete, ScopeDeliveriesWrite}
+var AllScopes = []string{ScopeMessagesWrite, ScopeMessagesRead, ScopeMessagesDelete, ScopeDeliveriesWrite, ScopeSendersWrite}
 
 // Principal is an authenticated caller.
 type Principal struct {
