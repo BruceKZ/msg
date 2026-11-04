@@ -326,7 +326,18 @@ token 泄露或换手机时，在设置页**吊销**旧 token、生成新的即�
 - 也接受表单：`kind=sms&from=95588&body=…`（除 `kind`、`senders`、`dedup_key` 外的字段都进 `data`）。
 - JSON 顶层出现未定义字段会被拒绝。请求体上限 64 KB。
 
-**查询参数**：`kind`（可重复或逗号分隔）、`source`、`q`（搜索标题和正文）、`before` / `since`（id 游标）、`limit`（默认 50，最大 500）。
+**查询参数**
+
+| 参数 | 说明 |
+|---|---|
+| `kind` | 按类型过滤，可重复或逗号分隔 |
+| `source` | 按提交者过滤 |
+| `q` | 搜索标题和正文 |
+| `order` | `desc`（默认，新到旧）或 `asc`（旧到新） |
+| `before` / `after` | id 游标：只要比它旧 / 比它新的（`since` 是 `after` 的旧名） |
+| `limit` | 每页条数，默认 50，**上限 100**，超过按 100 处理 |
+
+分页用 id 游标而不是页码：新消息不断进来时，页码会让翻页重复或漏掉，游标不会；而且翻到多后面都一样快。
 
 ```json
 {
@@ -339,11 +350,19 @@ token 泄露或换手机时，在设置页**吊销**旧 token、生成新的即�
     "created_at": "2026-11-04T13:00:01Z",
     "deliveries": { "tg": "sent" }
   }],
-  "next_before": 12
+  "next_before": 12,
+  "next_after": null
 }
 ```
 
-`next_before` 为 `null` 表示没有更多。
+返回满一页时给出下一页的游标：新到旧时是 `next_before`，旧到新时是 `next_after`；为 `null` 表示没有更多。
+
+```bash
+# 往下翻页
+curl -H "Authorization: Bearer $TOKEN" "$URL/api/v1/messages?limit=50&before=<next_before>"
+# 从头导出全部历史（旧到新）
+curl -H "Authorization: Bearer $TOKEN" "$URL/api/v1/messages?order=asc&limit=100&after=<next_after>"
+```
 
 ### 渠道、路由、token
 

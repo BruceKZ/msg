@@ -244,8 +244,21 @@ func (s *Server) listMessages(w http.ResponseWriter, r *http.Request, p *auth.Pr
 		writeErr(w, http.StatusBadRequest, "validation_failed", err.Error(), "before")
 		return
 	}
-	if f.Since, err = intParam(q, "since"); err != nil {
-		writeErr(w, http.StatusBadRequest, "validation_failed", err.Error(), "since")
+	// "since" is the older name of "after".
+	for _, name := range []string{"after", "since"} {
+		if q.Has(name) && f.After == 0 {
+			if f.After, err = intParam(q, name); err != nil {
+				writeErr(w, http.StatusBadRequest, "validation_failed", err.Error(), name)
+				return
+			}
+		}
+	}
+	switch q.Get("order") {
+	case "", "desc":
+	case "asc":
+		f.Asc = true
+	default:
+		writeErr(w, http.StatusBadRequest, "validation_failed", "order must be asc or desc", "order")
 		return
 	}
 	limit, err := intParam(q, "limit")
@@ -255,7 +268,7 @@ func (s *Server) listMessages(w http.ResponseWriter, r *http.Request, p *auth.Pr
 	}
 	f.Limit = int(limit)
 	if f.Limit == 0 {
-		f.Limit = 50
+		f.Limit = store.DefaultLimit
 	}
 	f.Limit = min(f.Limit, store.MaxLimit)
 
@@ -279,12 +292,18 @@ func (s *Server) listMessages(w http.ResponseWriter, r *http.Request, p *auth.Pr
 		s.internal(w, "list", err)
 		return
 	}
-	var next *int64
+	// A full page means there may be more: hand back the cursor for the next page
+	// in the same direction (next_before when newest-first, next_after when oldest-first).
+	var nextBefore, nextAfter *int64
 	if len(items) == f.Limit && len(items) > 0 {
 		id := items[len(items)-1].ID
-		next = &id
+		if f.Asc {
+			nextAfter = &id
+		} else {
+			nextBefore = &id
+		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items, "next_before": next})
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "next_before": nextBefore, "next_after": nextAfter})
 }
 
 func intParam(q url.Values, name string) (int64, error) {

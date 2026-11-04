@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -385,6 +386,50 @@ func TestPagination(t *testing.T) {
 	r = e.do("GET", "/api/v1/messages?since=3", tokReader, "")
 	if len(items(r)) != 2 || r.body["next_before"] != nil {
 		t.Fatalf("since: %v", r.body)
+	}
+
+	// Oldest first, walking the whole history with next_after.
+	var ids []float64
+	after := ""
+	for page := 0; page < 10; page++ {
+		r = e.do("GET", "/api/v1/messages?order=asc&limit=2"+after, tokReader, "")
+		for _, it := range items(r) {
+			ids = append(ids, it["id"].(float64))
+		}
+		if r.body["next_before"] != nil {
+			t.Fatalf("asc page has next_before: %v", r.body)
+		}
+		next, ok := r.body["next_after"].(float64)
+		if !ok {
+			break
+		}
+		after = "&after=" + strconv.Itoa(int(next))
+	}
+	if fmt.Sprint(ids) != "[1 2 3 4 5]" {
+		t.Fatalf("asc walk: %v", ids)
+	}
+	if r := e.do("GET", "/api/v1/messages?order=asc&after=3", tokReader, ""); fmt.Sprint(len(items(r)), items(r)[0]["id"]) != "2 4" {
+		t.Fatalf("after: %v", r.body)
+	}
+	if r := e.do("GET", "/api/v1/messages?order=sideways", tokReader, ""); errCode(r) != "validation_failed" {
+		t.Fatalf("bad order: %v", r.body)
+	}
+	if r := e.do("GET", "/api/v1/messages?limit=-1", tokReader, ""); errCode(r) != "validation_failed" {
+		t.Fatalf("negative limit: %v", r.body)
+	}
+}
+
+func TestLimitCap(t *testing.T) {
+	e := setup(t)
+	for i := 0; i < store.MaxLimit+5; i++ {
+		e.do("POST", "/api/v1/messages", tokNotes, `{"kind":"note","data":{"text":"n`+strconv.Itoa(i)+`"},"senders":[]}`)
+	}
+	r := e.do("GET", "/api/v1/messages?limit=100000", tokReader, "")
+	if len(items(r)) != store.MaxLimit || r.body["next_before"] == nil {
+		t.Fatalf("cap: got %d items, next_before %v", len(items(r)), r.body["next_before"])
+	}
+	if r := e.do("GET", "/api/v1/messages", tokReader, ""); len(items(r)) != store.DefaultLimit {
+		t.Fatalf("default: %d", len(items(r)))
 	}
 }
 

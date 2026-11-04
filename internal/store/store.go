@@ -233,11 +233,17 @@ type Filter struct {
 	Source string
 	Query  string // substring of envelope title or body
 	Before int64  // id < Before
-	Since  int64  // id > Since
+	After  int64  // id > After
+	Asc    bool   // oldest first; default newest first
 	Limit  int
 }
 
-const MaxLimit = 500
+// DefaultLimit and MaxLimit bound one page. Messages can be up to 64 KB, so
+// MaxLimit keeps the worst-case response around 6 MB.
+const (
+	DefaultLimit = 50
+	MaxLimit     = 100
+)
 
 // List returns messages newest first.
 func (s *Store) List(ctx context.Context, f Filter) ([]Message, error) {
@@ -245,7 +251,7 @@ func (s *Store) List(ctx context.Context, f Filter) ([]Message, error) {
 		return []Message{}, nil
 	}
 	if f.Limit <= 0 {
-		f.Limit = 50
+		f.Limit = DefaultLimit
 	}
 	if f.Limit > MaxLimit {
 		f.Limit = MaxLimit
@@ -271,15 +277,19 @@ func (s *Store) List(ctx context.Context, f Filter) ([]Message, error) {
 		where = append(where, "id < ?")
 		args = append(args, f.Before)
 	}
-	if f.Since > 0 {
+	if f.After > 0 {
 		where = append(where, "id > ?")
-		args = append(args, f.Since)
+		args = append(args, f.After)
 	}
 	q := `SELECT id, kind, source, data, envelope, created_at FROM messages`
 	if len(where) > 0 {
 		q += " WHERE " + strings.Join(where, " AND ")
 	}
-	q += " ORDER BY id DESC LIMIT ?"
+	if f.Asc {
+		q += " ORDER BY id ASC LIMIT ?"
+	} else {
+		q += " ORDER BY id DESC LIMIT ?"
+	}
 	args = append(args, f.Limit)
 
 	rows, err := s.db.QueryContext(ctx, q, args...)

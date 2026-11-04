@@ -115,16 +115,22 @@ JSON 请求体里出现未定义的顶层字段会被拒绝（`invalid_json`）�
 | `kind` | 按类型过滤，可重复：`?kind=sms&kind=notice` |
 | `source` | 按提交者过滤 |
 | `q` | 在 envelope 的标题和正文里搜索子串 |
-| `before` / `since` | 游标：id 小于 / 大于该值；用于翻页 / 增量拉取 |
-| `limit` | 默认 50，上限 500 |
+| `order` | `desc`（默认，新到旧）或 `asc`（旧到新） |
+| `before` | 游标：只返回 id 小于该值的消息 |
+| `after` | 游标：只返回 id 大于该值的消息（`since` 是它的旧名，仍可用） |
+| `limit` | 每页条数，默认 50，上限 100（超过按 100 处理）；消息最大 64 KB，所以单次响应最坏约 6 MB |
 
 响应：
 
 ```json
-{ "items": [ …消息资源… ], "next_before": 12 }
+{ "items": [ …消息资源… ], "next_before": 12, "next_after": null }
 ```
 
-`next_before` 为 `null` 表示没有更多。只返回 token 有权读取的类型。
+- 返回满一页时给出下一页的游标：`order=desc` 时是 `next_before`，`order=asc` 时是 `next_after`；为 `null` 表示没有更多。
+- 用 id 游标而不是页码：新消息不断进来时页码会错位（翻页时重复或漏掉），而且 `OFFSET` 越往后越慢；游标直接走主键索引。
+- 典型用法：网页首屏 `limit=50`，“加载更多”用 `before=<next_before>`；实时刷新用 `order=asc&after=<当前最新 id>` 逐页拉完；
+  脚本导出全部历史用 `order=asc` 加 `after=<next_after>` 一路翻到底。
+- 只返回 token 有权读取的类型。
 
 ### 3.4 重新投递 POST `/api/v1/messages/{id}/deliveries`
 

@@ -216,14 +216,18 @@ h2{font-size:16px;margin:22px 0 4px}
   async function poll() {
     if (location.hash === '#settings') return;
     try {
-      const { items } = await api(query(newestId ? { since: newestId } : {}));
-      const fresh = items.filter(m => m.id > newestId);
-      if (fresh.length) {
-        $('list').querySelector('.empty')?.remove();
-        for (const m of fresh.slice().reverse()) $('list').prepend(render(m, true));
-        newestId = fresh[0].id;
-        if (document.hidden) document.title = '(' + fresh.length + ') msg';
+      // Fetch everything newer than what is shown, oldest first, page by page,
+      // so a burst larger than one page is not partly skipped.
+      let added = 0;
+      for (let pages = 0; pages < 10; pages++) {
+        const { items, next_after } = await api(query({ order: 'asc', after: newestId }));
+        const fresh = items.filter(m => m.id > newestId);
+        if (fresh.length) $('list').querySelector('.empty')?.remove();
+        for (const m of fresh) { $('list').prepend(render(m, true)); newestId = m.id; }
+        added += fresh.length;
+        if (!next_after) break;
       }
+      if (added && document.hidden) document.title = '(' + added + ') msg';
       $('live').textContent = '● 实时';
     } catch { $('live').textContent = '○ 连接中断'; }
     document.querySelectorAll('.msg').forEach(c => c.querySelector('.time').textContent = ago(+c.dataset.ts));
